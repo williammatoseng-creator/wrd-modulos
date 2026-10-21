@@ -11,7 +11,7 @@ const MANIFEST = {
   contrato: "nexo-plug/1",
   id: "wrd-operacoes",
   nome: "WRD Soluções — Módulo Operações",
-  versao: "1.2.0",
+  versao: "1.3.0",
   schemaVersion: 1,
   entidades: ["cliente", "unidade", "tipo_servico", "servico", "atividade", "pendencia", "acao_5w2h", "usuario", "historico", "filtro_salvo"],
   indicadores: [
@@ -663,6 +663,18 @@ const WRDNuvem = (function () {
       async ler() { const l = await http(`/rest/v1/estado_modulo?modulo=eq.${modulo}&select=dados,versao,atualizado_em,aparelho`, { method: 'GET' }, true); return l && l[0] ? l[0] : null; },
       async salvar(dados, versao, aparelho) { return http('/rest/v1/rpc/salvar_estado', { method: 'POST', body: JSON.stringify({ p_modulo: modulo, p_dados: dados, p_versao: versao, p_aparelho: aparelho || null }) }, true); },
       async uso() { return http('/rest/v1/rpc/uso_modulos', { method: 'POST', body: '{}' }, true); },
+      /** Envia um PDF ao bucket privado "documentos" (pasta do módulo). Devolve o caminho guardado no registro. */
+      async enviarPdf(blob) {
+        await garantirToken();
+        const caminho = modulo + '/' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10) + '.pdf';
+        let r;
+        try { r = await f(CONFIG.url + '/storage/v1/object/documentos/' + caminho, { method: 'POST', headers: { apikey: CONFIG.chave, Authorization: 'Bearer ' + sessao.access_token, 'Content-Type': 'application/pdf' }, body: blob }); }
+        catch (e) { throw erro('Sem conexão com a nuvem.', 'OFFLINE'); }
+        if (!r.ok) { const t = await r.text(); throw erro(/exceeded|too large|size/i.test(t) ? 'O PDF passa do limite de 25 MB.' : 'Não foi possível enviar o arquivo (' + r.status + ').', 'ENVIO'); }
+        return caminho;
+      },
+      /** Link temporário (1 hora) para abrir um PDF do bucket privado. */
+      async linkPdf(caminho) { const j = await http('/storage/v1/object/sign/documentos/' + caminho, { method: 'POST', body: JSON.stringify({ expiresIn: 3600 }) }, true); return CONFIG.url + '/storage/v1' + j.signedURL; },
       async adicionarMembro(email, papel) { return http('/rest/v1/rpc/adicionar_membro', { method: 'POST', body: JSON.stringify({ p_email: email, p_modulo: modulo, p_papel: papel || 'membro' }) }, true); }
     };
   }
@@ -857,7 +869,103 @@ const WRDNuvem = (function () {
           <h3>Uso por módulo</h3><div data-nv-uso><p class="muted">Carregando…</p></div>` : ''}`;
     }
     const posRender = () => { pintar(); if (document.querySelector('[data-nv-uso]')) pintarUso(); };
-    return { disponivel, abrir, parar, telaHTML, botaoTopo, abaConfig, posRender, ativo: () => !!sync, situacao: () => (sync ? sync.situacao() : null) };
+    /** HTML de um anexo que está na nuvem (PDF). Anexos de link/localização são tratados pelo próprio módulo. */
+    function anexoHTML(a) {
+      if (a.nuvem) return `<a href="#" data-nv-abrir="${esc(a.nuvem)}">${esc(a.nome)}</a> <span class="muted xs">(PDF na nuvem)</span>`;
+      return '';
+    }
+    /** Pode anexar PDFs na nuvem agora? (precisa estar conectado; sem nuvem, só links e localizações) */
+    const pdfNaNuvem = () => !!(sync && cli && cli.conectado());
+    /**
+     * Janela de anexos em lote. opts: { alvos:[{id, rotulo, pista}], aceitaCaminho, gravar(alvoId, anexos) }
+     * Cada linha é um PDF (enviado à nuvem) ou um link/localização. A pista (ex.: número da proposta) sugere o registro pelo nome do arquivo.
+     */
+    function anexarLote(opts) {
+      const alvos = opts.alvos || [];
+      const LIMITE = 25 * 1024 * 1024;
+      const m = o.abrirModal('Anexar PDFs em lote', `<form class="grade" data-nv-form="lote">
+        <p class="ajuda">Escolha os PDFs do seu computador. Cada arquivo vai para o registro escolhido. O sistema sugere o registro pelo código que aparece no nome do arquivo (ex.: 201104-1.pdf). Também pode incluir um link ou localização sem arquivo.</p>
+        ${pdfNaNuvem() ? '<label class="campo">Arquivos PDF (até 25 MB cada)<input type="file" accept="application/pdf,.pdf" multiple data-nv-arquivos></label>' : '<p class="aviso">Para enviar PDFs, conecte a nuvem (Configurações › Nuvem e aparelhos). Sem nuvem, use o link ou a localização.</p>'}
+        <div data-nv-linhas></div>
+        <div class="linha"><button type="button" class="btn btn-sm" data-nv-add-link>+ Link ou localização sem arquivo</button></div>
+        <div class="linha fim"><button type="button" class="btn" data-fechar>Cancelar</button><button class="btn btn-primario" data-nv-ok>Anexar tudo</button></div></form>`);
+      const form = m.el.querySelector('form'), linhas = [];
+      const alvoPorPista = nome => { const n = nome.toLowerCase(); let melhor = null; for (const a of alvos) { for (const p0 of [].concat(a.pistas || a.pista || [])) { const p = String(p0 || '').toLowerCase(); if (p && n.includes(p) && (!melhor || p.length > melhor.len)) melhor = { id: a.id, len: p.length }; } } return melhor ? melhor.id : ''; };
+      const opcoes = sel => '<option value="">Escolha o registro…</option>' + alvos.map(a => `<option value="${esc(a.id)}"${a.id === sel ? ' selected' : ''}>${esc(a.rotulo)}</option>`).join('');
+      const ehLink = t => /^https?:\/\/\S+$/i.test(t);
+      function desenhar() {
+        m.el.querySelector('[data-nv-linhas]').innerHTML = linhas.map((l, i) => `<div class="linha" data-nv-linha="${i}">
+          <input name="nome" value="${esc(l.nome)}" placeholder="Nome do documento" aria-label="Nome do documento">
+          <select name="alvo" aria-label="Registro">${opcoes(l.alvo)}</select>
+          <input name="link" value="${esc(l.link)}" placeholder="${opts.aceitaCaminho ? 'Link https:// ou localização' : 'Link https://'}" aria-label="Link ou localização">
+          <button type="button" class="btn btn-sm" data-nv-rm="${i}" aria-label="Remover linha">×</button>
+          ${l.arquivo ? `<span class="muted xs">${esc(l.arquivo.name)} · ${Math.round(l.arquivo.size / 1024)} KB</span>` : ''}</div>`).join('');
+      }
+      function ler() { linhas.forEach((l, i) => { const el = m.el.querySelector(`[data-nv-linha="${i}"]`); if (!el) return; l.nome = el.querySelector('[name=nome]').value.trim(); l.alvo = el.querySelector('[name=alvo]').value; l.link = el.querySelector('[name=link]').value.trim(); }); }
+      m.el.querySelector('[data-nv-add-link]').onclick = () => { ler(); linhas.push({ nome: '', alvo: '', link: '' }); desenhar(); };
+      m.el.addEventListener('click', e => { const b = e.target.closest('[data-nv-rm]'); if (b) { ler(); linhas.splice(+b.dataset.nvRm, 1); desenhar(); } });
+      const arq = m.el.querySelector('[data-nv-arquivos]');
+      if (arq) arq.onchange = () => {
+        ler();
+        for (const f of arq.files) {
+          if (!/\.pdf$/i.test(f.name) && f.type !== 'application/pdf') { o.toast(`"${f.name}" não é PDF e foi ignorado.`, 'erro'); continue; }
+          if (f.size > LIMITE) { o.toast(`"${f.name}" passa de 25 MB e foi ignorado.`, 'erro'); continue; }
+          const nome = f.name.replace(/\.pdf$/i, '');
+          linhas.push({ nome, alvo: alvoPorPista(nome), link: '', arquivo: f });
+        }
+        arq.value = ''; desenhar();
+      };
+      desenhar();
+      form.addEventListener('submit', async e => {
+        e.preventDefault(); ler();
+        const erros = [];
+        linhas.forEach((l, i) => {
+          if (!l.nome) erros.push(`Linha ${i + 1}: informe o nome.`);
+          if (!l.alvo) erros.push(`Linha ${i + 1}: escolha o registro.`);
+          if (!l.arquivo && !l.link) erros.push(`Linha ${i + 1}: informe o arquivo ou o link.`);
+          if (l.link && !ehLink(l.link) && !(opts.aceitaCaminho && !/[\r\n\t]/.test(l.link) && l.link.length <= 500)) erros.push(`Linha ${i + 1}: o link deve começar com https://${opts.aceitaCaminho ? ' ou ser uma localização em uma linha só' : ''}.`);
+          if (l.arquivo && !pdfNaNuvem()) erros.push(`Linha ${i + 1}: conecte a nuvem para enviar o PDF.`);
+        });
+        if (linhas.length === 0) erros.push('Escolha pelo menos um PDF ou inclua um link.');
+        if (erros.length) { o.toast(erros[0] + (erros.length > 1 ? ` (+${erros.length - 1})` : ''), 'erro'); return; }
+        const btn = m.el.querySelector('[data-nv-ok]'); btn.disabled = true;
+        const totalArquivos = linhas.filter(x => x.arquivo).length;
+        const porAlvo = new Map(); let enviados = 0;
+        try {
+          for (const l of linhas) {
+            const lista = porAlvo.get(l.alvo) || []; porAlvo.set(l.alvo, lista);
+            if (l.arquivo) {
+              btn.textContent = `Enviando ${enviados + 1} de ${totalArquivos}…`;
+              const caminho = await cli.enviarPdf(l.arquivo);
+              enviados++;
+              lista.push({ nome: l.nome, tipo: 'application/pdf', tamanho: l.arquivo.size, nuvem: caminho });
+              if (l.link) lista.push(ehLink(l.link) ? { nome: l.nome + ' (link)', url: l.link } : { nome: l.nome + ' (localização)', caminho: l.link });
+            } else {
+              lista.push(ehLink(l.link) ? { nome: l.nome, url: l.link } : { nome: l.nome, caminho: l.link });
+            }
+          }
+          for (const [alvo, lista] of porAlvo) await opts.gravar(alvo, lista);
+          m.fechar();
+          o.toast(`${linhas.length} anexo(s) incluído(s) em ${porAlvo.size} registro(s).`, 'ok');
+          if (opts.depois) opts.depois();
+        } catch (er) {
+          btn.disabled = false; btn.textContent = 'Anexar tudo';
+          o.toast(er.message, 'erro');
+        }
+      });
+      return m;
+    }
+
+    // abrir PDF da nuvem: link temporário, em nova aba (a aba é aberta antes, para o navegador não bloquear)
+    document.addEventListener('click', async e => {
+      const a = e.target.closest('[data-nv-abrir]'); if (!a) return;
+      e.preventDefault();
+      const janela = window.open('', '_blank', 'noopener');
+      try { const url = await cli.linkPdf(a.dataset.nvAbrir); if (janela) janela.location = url; else window.open(url, '_blank', 'noopener'); }
+      catch (er) { if (janela) janela.close(); o.toast(er.message, 'erro'); }
+    });
+
+    return { disponivel, abrir, parar, telaHTML, botaoTopo, abaConfig, posRender, ativo: () => !!sync, situacao: () => (sync ? sync.situacao() : null), anexoHTML, pdfNaNuvem, anexarLote };
   }
 
   return { CONFIG, cliente, sincronizador, mesclar, integrar, MSG };
@@ -1136,7 +1244,8 @@ const WRDOps = (function () {
     { area: 'Plano 5W2H', regra: 'Obrigatórios: What, Why, When (início e término) e Who; Where, How e custos são opcionais.', fonte: 'Campos do pedido §8; obrigatoriedade definido pelo executor · aprovado pelo William em 20/10/2026', status: 'CONFIRMADO' },
     { area: 'Plano 5W2H', regra: 'Ação concluída passa o progresso a 100%.', fonte: 'Definido pelo executor · aprovado pelo William em 20/10/2026', status: 'CONFIRMADO' },
     { area: 'Acesso', regra: 'Login com 3 a 30 caracteres (letras, números, ponto, hífen, sublinhado); sempre ao menos um administrador ativo.', fonte: 'Definido pelo executor · aprovado pelo William em 20/10/2026', status: 'CONFIRMADO' },
-    { area: 'Anexos', regra: 'Anexo aceito só como arquivo (conteúdo data:) ou link http/https; outros conteúdos são recusados.', fonte: 'Definido pelo executor (segurança: evita código malicioso em anexos) · aprovado pelo William em 20/10/2026', status: 'CONFIRMADO' },
+    { area: 'Anexos', regra: 'Localização de arquivo (caminho no PC ou no Drive) é guardada como texto; o arquivo não é copiado e não abre no celular. Na importação em lote, o PDF é casado pelo nome exato com a coluna "arquivo" e precisa ser selecionado junto com a planilha.', fonte: 'Pedido do William (importar arquivos em lote: PDF, seleção no PC e link de localização)', status: 'CONFIRMADO' },
+    { area: 'Anexos', regra: 'Anexo aceito só como arquivo (conteúdo data:), link http/https ou localização; outros conteúdos são recusados.', fonte: 'Definido pelo executor (segurança: evita código malicioso em anexos) · aprovado pelo William em 20/10/2026', status: 'CONFIRMADO' },
     { area: 'Dados', regra: 'Backup de demonstração não pode ser importado nos dados reais; a importação exige que o backup contenha o seu usuário administrador ativo.', fonte: 'Mesmo critério do Módulo Financeiro (demonstração separada); definido pelo executor quanto ao administrador · aprovado pelo William em 20/10/2026', status: 'CONFIRMADO' },
     { area: 'Configurações', regra: 'Dias para "próximo do vencimento": de 1 a 60.', fonte: 'Definido pelo executor · aprovado pelo William em 20/10/2026', status: 'CONFIRMADO' },
     { area: 'Cadastros', regra: 'E-mail aceito só no formato nome@dominio.ext (cliente, contatos, usuários).', fonte: 'Definido pelo executor · aprovado pelo William em 20/10/2026', status: 'CONFIRMADO' },
@@ -1423,6 +1532,46 @@ const WRDOps = (function () {
     }
 
     /* ---------- anexos ---------- */
+    /** Anexo do lote: PDF na pasta do módulo na nuvem, link https ou localização (caminho em uma linha). Nunca conteúdo embutido. */
+    const LIMITE_PDF = 25 * 1024 * 1024;
+    function validarAnexosLote(lista) {
+      if (!Array.isArray(lista) || !lista.length) fail('Nenhum anexo para incluir.');
+      const u = user();
+      return lista.map(a => {
+        const nome = txt(a && a.nome);
+        if (!nome) fail('Anexo sem nome.');
+        const base = { id: uid('anx'), nome, ts: nowISO(), autor: u ? u.nome : '' };
+        if (a.nuvem) {
+          if (!/^operacoes\/[a-z0-9-]+\.pdf$/.test(String(a.nuvem))) fail(`O arquivo "${nome}" não está na pasta deste módulo.`);
+          if (!(a.tamanho > 0) || a.tamanho > LIMITE_PDF) fail(`O arquivo "${nome}" passa de 25 MB.`);
+          return Object.assign(base, { tipo: 'application/pdf', tamanho: a.tamanho, nuvem: String(a.nuvem) });
+        }
+        if (a.url) {
+          if (!/^https?:\/\/\S+$/i.test(a.url)) fail(`O link do anexo "${nome}" deve começar com http:// ou https://.`);
+          return Object.assign(base, { url: String(a.url) });
+        }
+        if (a.caminho) {
+          const caminho = txt(a.caminho);
+          if (!caminho || caminho.length > 500 || /[\r\n\t]/.test(caminho)) fail(`A localização do anexo "${nome}" é inválida: use um caminho em uma linha só, com até 500 caracteres.`);
+          if (/^https?:/i.test(caminho)) fail('Para um endereço da internet, use o campo de link (https), não a localização.');
+          return Object.assign(base, { caminho });
+        }
+        fail(`O anexo "${nome}" precisa de um arquivo na nuvem, de um link ou de uma localização.`);
+      });
+    }
+    /** Acrescenta anexos a um serviço sem apagar os existentes. Mesmas permissões de editar o serviço (equipe: só os que lhe são atribuídos). */
+    function acrescentarAnexosServico(id, lista) {
+      guard('servico.salvar');
+      const ex = exigirServico(id);
+      const novos = validarAnexosLote(lista);
+      return mutate(() => {
+        ex.anexos = (ex.anexos || []).concat(novos);
+        ex.updatedAt = nowISO();
+        log({ acao: 'servico.anexo', entidade: 'servico', entidadeId: ex.id, codigo: ex.codigo, servicoId: ex.id, detalhe: `${novos.length} anexo(s) incluído(s): ${novos.map(a => a.nome).join('; ')}` });
+        return { id, quantidade: novos.length };
+      });
+    }
+
     function validarAnexos(lista) {
       if (lista == null) return [];
       if (!Array.isArray(lista)) fail('Anexos inválidos.');
@@ -1430,6 +1579,12 @@ const WRDOps = (function () {
       return lista.map(a => {
         const nome = txt(a.nome);
         if (!nome) fail('Anexo sem nome.');
+        if (a.caminho && !a.url && !a.conteudo) {
+          const caminho = txt(a.caminho);
+          if (!caminho || caminho.length > 500 || /[\r\n\t]/.test(caminho)) fail(`A localização do anexo "${nome}" é inválida: use um caminho em uma linha só, com até 500 caracteres.`);
+          if (/^https?:/i.test(caminho)) fail(`Para um endereço da internet, use o campo de link (https), não a localização.`);
+          return { id: a.id || uid('anx'), nome, caminho, ts: a.ts || nowISO(), autor: a.autor || (u ? u.nome : '') };
+        }
         if (a.url) {
           if (!/^https?:\/\/\S+$/i.test(a.url)) fail(`O link do anexo "${nome}" deve começar com http:// ou https://.`);
           return { id: a.id || uid('anx'), nome, url: String(a.url), ts: a.ts || nowISO(), autor: a.autor || (u ? u.nome : '') };
@@ -2222,7 +2377,7 @@ const WRDOps = (function () {
         ['cliente', 'Cliente (razão social, nome fantasia ou CNPJ)', true, 'Cliente Exemplo Ltda'], ['unidade', 'Unidade / local', true, 'Loja Centro'], ['titulo', 'Título do serviço', true, 'Renovação do AVCB — Loja Centro'],
         ['tipo', 'Tipo de serviço (nome do catálogo)', true, 'Obtenção / renovação de AVCB'], ['responsavel', 'Responsável (login ou nome)', true, 'admin'], ['proposta', 'Nº da proposta (NNNNNN-R)', false, '201098-1'],
         ['pedido', 'Nº do pedido de compra / OS do cliente', false, 'PC-45871'], ['referencia', 'Referência (contrato, OS)', false, ''], ['prioridade', 'Prioridade (baixa, média, alta, urgente)', false, 'média'], ['data_entrada', 'Data de entrada (dd/mm/aaaa)', false, '20/10/2026'],
-        ['inicio_previsto', 'Início previsto (dd/mm/aaaa)', false, '27/10/2026'], ['entrega_prevista', 'Entrega prevista (dd/mm/aaaa)', false, '30/11/2026'], ['escopo', 'Escopo contratado', false, 'Vistoria, protocolo e acompanhamento'], ['descricao', 'Descrição', false, '']] },
+        ['inicio_previsto', 'Início previsto (dd/mm/aaaa)', false, '27/10/2026'], ['entrega_prevista', 'Entrega prevista (dd/mm/aaaa)', false, '30/11/2026'], ['escopo', 'Escopo contratado', false, 'Vistoria, protocolo e acompanhamento'], ['descricao', 'Descrição', false, ''], ['arquivo', 'Arquivo PDF (nome exato do PDF selecionado no PC)', false, 'pedido-45871.pdf'], ['localizacao', 'Localização do arquivo (caminho no PC ou no Drive)', false, 'G:/Meu Drive/Pedidos/pedido-45871.pdf']] },
       clientes: { rotulo: 'Clientes e unidades', permissao: 'cliente.salvar', colunas: [
         ['razao_social', 'Razão social ou nome', true, 'Cliente Exemplo Ltda'], ['nome_fantasia', 'Nome fantasia', false, 'Exemplo'], ['cnpj', 'CNPJ/CPF', false, ''], ['email', 'E-mail', false, ''], ['telefone', 'Telefone', false, ''],
         ['unidade', 'Unidade / local', false, 'Loja Centro'], ['endereco', 'Endereço', false, 'Rua Exemplo, 100'], ['cidade', 'Cidade', false, 'São Paulo'], ['uf', 'UF', false, 'SP'],
@@ -2266,9 +2421,16 @@ const WRDOps = (function () {
           const ja = state.servicos.find(s => s.clienteId === cli.id && norm(s.pedido) === norm(pedido) && norm(s.titulo) === norm(l.titulo));
           if (ja) fail(`Pedido "${pedido}" já lançado como ${ja.codigo} (mesmo cliente, pedido e título).`, 'DUPLICIDADE');
         }
+        const anexos = [];
+        if (txt(l.arquivo)) {
+          const f = (o.arquivos || {})[txt(l.arquivo).toLowerCase()];
+          if (!f) fail(`Arquivo "${txt(l.arquivo)}" não foi selecionado no PC. Selecione o PDF junto com a planilha ou deixe a coluna vazia.`);
+          anexos.push({ nome: txt(l.arquivo), tipo: 'application/pdf', conteudo: f.conteudo });
+        }
+        if (txt(l.localizacao)) anexos.push({ nome: txt(l.arquivo) || 'Arquivo do pedido', caminho: txt(l.localizacao) });
         const r = salvarServico({ clienteId: cli.id, unidadeId: uni.id, titulo: l.titulo, tipoId: tipoS.id, responsavelId: pessoaLote(l.responsavel, 'Responsável'), prioridade: prioLote(l.prioridade),
           dataEntrada: dataLote(l.data_entrada, 'Data de entrada') || hoje(), prevInicio: dataLote(l.inicio_previsto, 'Início previsto'), prevEntrega: dataLote(l.entrega_prevista, 'Entrega prevista'),
-          proposta, pedido, referencia: l.referencia || '', escopo: l.escopo, descricao: l.descricao }, { confirmar: !!o.aceitarDuplicados });
+          proposta, pedido, referencia: l.referencia || '', escopo: l.escopo, descricao: l.descricao, anexos }, { confirmar: !!o.aceitarDuplicados });
         return { codigo: r.codigo, texto: l.titulo };
       }
       if (tipo === 'clientes') {
@@ -2541,7 +2703,7 @@ const WRDOps = (function () {
       salvarPendencia, resolverPendencia, cancelarPendencia, reabrirPendencia, listarPendencias,
       rascunhoAcaoDePendencia, salvarAcao, listarAcoes, impactoDatas, alterarDatas,
       historico, busca, cronograma, indicadores, relatorio, emitirNumeroRelatorio, csvRelatorio, csvLista,
-      filtrosSalvos, salvarFiltro, removerFiltro, exportarJSON, importarJSON, snapshot, entregasProcesso, parseTabela, MODELOS_LOTE, modeloLote, importarLote, textoRelatorio, EVENTOS_PUBLICOS, REGRAS, STATUS_REGRA
+      filtrosSalvos, salvarFiltro, removerFiltro, exportarJSON, importarJSON, snapshot, entregasProcesso, parseTabela, MODELOS_LOTE, modeloLote, importarLote, textoRelatorio, EVENTOS_PUBLICOS, REGRAS, STATUS_REGRA, acrescentarAnexosServico
     };
   }
 
@@ -2801,12 +2963,13 @@ if (typeof module !== 'undefined') module.exports = WRDDemo;
     anexosEmEdicao.set(chave, (lista || []).map(a => Object.assign({}, a)));
     return `<div class="anexos" data-anexos="${chave}"><div class="rot-anexos">${esc(rot || 'Documentos e anexos')}</div><div data-lista>${listaAnexos(chave)}</div>
       <div class="linha"><label class="btn btn-sm">Anexar arquivo<input type="file" data-anexo-arq="${chave}" class="sr" multiple></label>
-      <button type="button" class="btn btn-sm" data-anexo-link="${chave}">Adicionar link</button><span class="ajuda">Arquivo até 500 KB. Arquivos maiores: guarde no Drive e anexe o link.</span></div></div>`;
+      <button type="button" class="btn btn-sm" data-anexo-link="${chave}">Adicionar link</button>
+      <button type="button" class="btn btn-sm" data-anexo-local="${chave}">Adicionar localização</button><span class="ajuda">Arquivo até 500 KB. Arquivos maiores: guarde no Drive e anexe o link.</span></div></div>`;
   }
   function listaAnexos(chave) {
     const l = anexosEmEdicao.get(chave) || [];
     if (!l.length) return '<p class="muted peq">Nenhum anexo.</p>';
-    return '<ul class="lista-anexos">' + l.map((a, i) => `<li>${a.url ? `<a href="${esc(a.url)}" target="_blank" rel="noopener noreferrer">${esc(a.nome)}</a> <span class="muted xs">(link)</span>` : `<a href="${esc(a.conteudo)}" download="${esc(a.nome)}">${esc(a.nome)}</a> <span class="muted xs">${Math.round((a.tamanho || 0) / 1024)} KB</span>`} <span class="muted xs">${esc(a.autor || '')}</span> <button type="button" class="btn-link xs" data-anexo-rem="${chave}" data-i="${i}">remover</button></li>`).join('') + '</ul>';
+    return '<ul class="lista-anexos">' + l.map((a, i) => `<li>${a.url ? `<a href="${esc(a.url)}" target="_blank" rel="noopener noreferrer">${esc(a.nome)}</a> <span class="muted xs">(link)</span>` : a.caminho ? `${esc(a.nome)} <code>${esc(a.caminho)}</code> <span class="muted xs">(localização)</span>` : `<a href="${esc(a.conteudo)}" download="${esc(a.nome)}">${esc(a.nome)}</a> <span class="muted xs">${Math.round((a.tamanho || 0) / 1024)} KB</span>`} <span class="muted xs">${esc(a.autor || '')}</span> <button type="button" class="btn-link xs" data-anexo-rem="${chave}" data-i="${i}">remover</button></li>`).join('') + '</ul>';
   }
   document.addEventListener('change', e => {
     const inpA = e.target.closest('[data-anexo-arq]');
@@ -2828,6 +2991,14 @@ if (typeof module !== 'undefined') module.exports = WRDDemo;
       const m = modal('Adicionar link', `<form class="grade">${campo('Nome do documento', inp('n', '', { req: true }), { req: true })}${campo('Endereço (https://…)', inp('u', '', { req: true, type: 'url', ph: 'https://drive.google.com/…' }), { req: true })}
         <div class="linha fim"><button type="button" class="btn" data-fechar>Cancelar</button><button class="btn btn-primario">Adicionar</button></div></form>`);
       m.el.querySelector('form').onsubmit = ev => { ev.preventDefault(); const u = ev.target.u.value.trim(); if (!/^https?:\/\//i.test(u)) { toast('O link deve começar com http:// ou https://', 'erro'); return; } anexosEmEdicao.get(chave).push({ nome: ev.target.n.value.trim(), url: u }); atualizarAnexos(chave); m.fechar(); };
+      return;
+    }
+    const lc = e.target.closest('[data-anexo-local]');
+    if (lc) {
+      const chave = lc.dataset.anexoLocal;
+      const m = modal('Adicionar localização do arquivo', `<form class="grade">${campo('Nome do documento', inp('n', '', { req: true }), { req: true })}${campo('Caminho do arquivo (no PC ou no Drive)', inp('c', '', { req: true, ph: 'G:/Meu Drive/Pedidos/arquivo.pdf' }), { req: true, ajuda: 'O arquivo não é copiado: fica guardado só o caminho. Não abre no celular.' })}
+        <div class="linha fim"><button type="button" class="btn" data-fechar>Cancelar</button><button class="btn btn-primario">Adicionar</button></div></form>`);
+      m.el.querySelector('form').onsubmit = ev => { ev.preventDefault(); const c = ev.target.c.value.trim(); if (!c || /[\r\n\t]/.test(c)) { toast('Informe o caminho em uma linha só.', 'erro'); return; } anexosEmEdicao.get(chave).push({ nome: ev.target.n.value.trim(), caminho: c }); atualizarAnexos(chave); m.fechar(); };
       return;
     }
     const rm = e.target.closest('[data-anexo-rem]');
@@ -3032,12 +3203,18 @@ if (typeof module !== 'undefined') module.exports = WRDDemo;
   /* =================================================================== */
   /* SERVIÇOS: KANBAN E LISTA                                             */
   /* =================================================================== */
+  /** Anexos em lote: cada PDF vai para o serviço cujo código ou nº de proposta aparece no nome do arquivo. */
+  function anexarPdfsLote() {
+    const alvos = core.listarServicos({}).map(x => ({ id: x.id, rotulo: `${x.codigo} · ${x.clienteNome || ''} — ${x.titulo || ''}`, pistas: [x.codigo, x.proposta].filter(Boolean) }));
+    NV.anexarLote({ alvos, aceitaCaminho: true, depois: () => render(), gravar: (id, lista) => { core.acrescentarAnexosServico(id, lista); } });
+  }
   function telaServicos(el) {
     const f = filtrosDe('servicos');
     const lista = core.listarServicos(f);
     el.innerHTML = `<div class="cab-tela"><h1>Serviços</h1><div class="linha">
         <div class="alternar" role="group" aria-label="Visualização"><button data-act="vista" data-v="kanban" aria-pressed="${UI.vista === 'kanban'}">Kanban</button><button data-act="vista" data-v="lista" aria-pressed="${UI.vista === 'lista'}">Lista</button></div>
         ${UI.vista === 'lista' && core.can('exportar') ? '<button class="btn" data-act="csv-servicos">Exportar Excel (CSV)</button>' : ''}
+        ${typeof NV !== 'undefined' && NV && NV.pdfNaNuvem() && core.can('servico.salvar') ? '<button class="btn" data-act="anexar-lote">Anexar PDFs em lote</button>' : ''}
         ${core.can(core.MODELOS_LOTE.servicos.permissao) ? '<button class="btn" data-act="importar-lote" data-tipo="servicos">Importar em lote</button>' : ''}${core.can('servico.salvar') ? '<button class="btn btn-primario" data-act="novo-servico">+ Novo serviço</button>' : ''}</div></div>
       ${barraFiltros('servicos')}
       <p class="peq muted">${lista.length} serviço(s) encontrados.</p>
@@ -3200,7 +3377,7 @@ if (typeof module !== 'undefined') module.exports = WRDDemo;
   const rotAcao = a => ROT_ACOES[a] || a;
   function anexosLeitura(l) {
     if (!l || !l.length) return '<p class="muted">Nenhum anexo.</p>';
-    return '<ul class="lista-anexos">' + l.map(a => `<li>${a.url ? `<a href="${esc(a.url)}" target="_blank" rel="noopener noreferrer">${esc(a.nome)}</a> <span class="muted xs">(link)</span>` : `<a href="${esc(a.conteudo)}" download="${esc(a.nome)}">${esc(a.nome)}</a>`} <span class="muted xs">${esc(a.autor || '')} ${a.ts ? fd(core.dataLocal(a.ts)) : ''}</span></li>`).join('') + '</ul>';
+    return '<ul class="lista-anexos">' + l.map(a => `<li>${a.nuvem ? (typeof NV !== 'undefined' && NV ? NV.anexoHTML(a) : esc(a.nome)) : a.url ? `<a href="${esc(a.url)}" target="_blank" rel="noopener noreferrer">${esc(a.nome)}</a> <span class="muted xs">(link)</span>` : a.caminho ? `${esc(a.nome)} <code>${esc(a.caminho)}</code> <span class="muted xs">(localização)</span>` : `<a href="${esc(a.conteudo)}" download="${esc(a.nome)}">${esc(a.nome)}</a>`} <span class="muted xs">${esc(a.autor || '')} ${a.ts ? fd(core.dataLocal(a.ts)) : ''}</span></li>`).join('') + '</ul>';
   }
   async function mudarCondicao(id) {
     const s = core.servicoDetalhe(id);
@@ -3822,6 +3999,7 @@ if (typeof module !== 'undefined') module.exports = WRDDemo;
       case 'salvar-filtro': { const n = await pedirTexto('Salvar filtro', 'Dê um nome para este conjunto de filtros (fica disponível só para você).', { rotulo: 'Nome do filtro', botao: 'Salvar' }); if (n) { const r = await executar(() => core.salvarFiltro(UI.tela, n, filtrosDe(UI.tela)), {}, 'Filtro salvo.'); if (r.ok) refresh(); } break; }
       case 'remover-salvo': { const s = $('[data-act-sel="aplicar-salvo"]'); if (!s || !s.value) { toast('Escolha o filtro salvo na lista.', 'info'); break; } await executar(() => core.removerFiltro(s.value), {}, 'Filtro excluído.'); refresh(); break; }
       case 'novo-servico': formServico(null, a.dataset.cliente ? { clienteId: a.dataset.cliente } : null); break;
+      case 'anexar-lote': anexarPdfsLote(); break;
       case 'editar-servico': formServico(core.servicoDetalhe(id)); break;
       case 'condicao': mudarCondicao(id); break;
       case 'aceite': registrarAceite(id); break;
@@ -3909,17 +4087,29 @@ if (typeof module !== 'undefined') module.exports = WRDDemo;
       <details class="mais"><summary>Colunas aceitas (* obrigatória)</summary><ul class="lista-colunas" data-cols>${colunas()}</ul><p class="ajuda">A 1ª linha precisa ter os nomes das colunas (como no modelo). Datas em dd/mm/aaaa. Colunas desconhecidas são ignoradas.</p></details>
       <div class="campo"><span>Arquivo CSV</span><input type="file" accept=".csv,.txt,text/csv" data-arq-lote><span class="ajuda">No Excel: Arquivo › Salvar como › CSV (separado por ponto e vírgula). Arquivos .xlsx não são lidos diretamente.</span></div>
       ${campo('…ou cole aqui as células copiadas do Excel (com o cabeçalho)', area('texto', '', { rows: 6, ph: 'cliente;unidade;titulo;tipo;responsavel…' }))}
+      <div class="campo" data-op-pdfs><span>PDFs do pedido (opcional, para a coluna "arquivo")</span><input type="file" accept="application/pdf,.pdf" multiple data-arq-pdfs><span class="ajuda" data-pdfs-info>Nenhum PDF selecionado. O nome de cada PDF precisa ser igual ao da coluna "arquivo". Até 500 KB cada; para arquivos maiores, use a coluna "localizacao".</span></div>
       <div class="linha" data-op-servicos><label class="chk-f"><input type="checkbox" name="criarFaltantes"> Criar clientes e unidades que faltarem</label><label class="chk-f"><input type="checkbox" name="aceitarDuplicados"> Importar mesmo se parecer duplicado</label></div>
       <div data-op-atv>${campo('Justificativa para atividades que vencem depois da entrega prevista (opcional)', inp('justificativa', ''))}</div>
       <div class="linha fim"><button type="button" class="btn" data-fechar>Cancelar</button><button type="button" class="btn btn-primario" data-conferir>Conferir (nada é gravado)</button></div>
       <div data-resultado></div></div>`, { largo: true });
     const el = m.el, f = sel2 => el.querySelector(sel2);
-    const ajustar = () => { f('[data-op-servicos]').classList.toggle('oculto', tipo !== 'servicos'); f('[data-op-atv]').classList.toggle('oculto', tipo !== 'atividades'); f('[data-cols]').innerHTML = colunas(); f('[data-resultado]').innerHTML = ''; };
+    const pdfs = {};
+    const ajustar = () => { f('[data-op-pdfs]').classList.toggle('oculto', tipo !== 'servicos'); f('[data-op-servicos]').classList.toggle('oculto', tipo !== 'servicos'); f('[data-op-atv]').classList.toggle('oculto', tipo !== 'atividades'); f('[data-cols]').innerHTML = colunas(); f('[data-resultado]').innerHTML = ''; };
     ajustar();
     f('[name=tipo]').onchange = e => { tipo = e.target.value; ajustar(); };
     f('[data-modelo]').onclick = () => { try { baixar(`modelo-importacao-${tipo}.csv`, core.modeloLote(tipo), 'text/csv;charset=utf-8'); } catch (er) { toast(er.message, 'erro'); } };
     f('[data-arq-lote]').onchange = async e => { const arq = e.target.files[0]; if (!arq) return; const buf = await arq.arrayBuffer(); let t = new TextDecoder('utf-8').decode(buf); if (t.includes('\ufffd')) t = new TextDecoder('windows-1252').decode(buf); f('[name=texto]').value = t; toast(`Arquivo "${arq.name}" carregado. Clique em Conferir.`, 'info'); };
-    const opcoes = simular => ({ simular, criarFaltantes: f('[name=criarFaltantes]').checked, aceitarDuplicados: f('[name=aceitarDuplicados]').checked, justificativa: f('[name=justificativa]').value });
+    f('[data-arq-pdfs]').onchange = async e => {
+      for (const arq of Array.from(e.target.files)) {
+        if (arq.size > 500 * 1024) { toast(`"${arq.name}" passa de 500 KB e não foi selecionado. Use a coluna localizacao.`, 'erro'); continue; }
+        const conteudo = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(arq); });
+        pdfs[arq.name.trim().toLowerCase()] = { nome: arq.name, conteudo };
+      }
+      const nomes = Object.values(pdfs).map(p => p.nome);
+      f('[data-pdfs-info]').textContent = nomes.length ? `${nomes.length} PDF(s) selecionado(s): ${nomes.join(', ')}` : 'Nenhum PDF selecionado.';
+      e.target.value = '';
+    };
+    const opcoes = simular => ({ simular, arquivos: pdfs, criarFaltantes: f('[name=criarFaltantes]').checked, aceitarDuplicados: f('[name=aceitarDuplicados]').checked, justificativa: f('[name=justificativa]').value });
     const tabela = rel => `<table class="tab"><thead><tr><th>Linha</th><th>Resultado</th><th>Código</th><th>Registro / motivo</th></tr></thead><tbody>${rel.linhas.map(x => `<tr><td class="num">${x.linha}</td><td>${x.ok ? '<span class="chip sit-resolvida">OK</span>' : x.duplicado ? '<span class="chip sit-aguardando">Já existe</span>' : '<span class="chip sit-vencida">Erro</span>'}</td><td class="nowrap">${esc(x.codigo || '')}</td><td>${esc(x.ok ? x.texto : x.erro)}</td></tr>`).join('')}</tbody></table>`;
     f('[data-conferir]').onclick = async () => {
       const texto = f('[name=texto]').value;
