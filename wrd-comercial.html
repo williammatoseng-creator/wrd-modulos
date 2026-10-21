@@ -3296,7 +3296,7 @@ if (typeof module !== 'undefined') module.exports = WRDDemo;
     const cfg = core.config();
     const m = modal('Importar em lote — pedidos de orçamento e prospects', `<div data-imp-passo1><form class="grade" data-imp-form>
       <p class="ajuda">Copie as linhas do Excel/Planilhas <b>com o cabeçalho</b> e cole abaixo, ou escolha um arquivo CSV. Só a coluna <b>Empresa</b> é obrigatória. Colunas reconhecidas: ${esc(Object.values({ a: 'Empresa, Nome fantasia, CNPJ, Cidade, UF, Unidade, Endereço, Contato, Cargo, Telefone, WhatsApp, E-mail, Serviço, Necessidade (ou Pedido/Descrição), Origem, Responsável, Valor estimado, Previsão de fechamento, Prioridade, Próxima ação, Data da próxima ação' }).join(''))}. Planilha .xlsx: abra no Excel e copie/cole (o arquivo .xlsx em si não é lido).</p>
-      <div class="linha"><button type="button" class="btn btn-sm" data-imp-modelo>Baixar modelo (CSV)</button><label class="btn btn-sm">Escolher arquivo CSV<input type="file" accept=".csv,.txt,.tsv,text/csv,text/plain" data-imp-arq hidden></label></div>
+      <div class="linha"><button type="button" class="btn btn-sm" data-imp-modelo>Baixar modelo (CSV)</button><label class="btn btn-sm">Escolher arquivo CSV<input type="file" accept=".csv,.txt,.tsv,text/csv,text/plain" data-imp-arq hidden></label>${typeof NV !== 'undefined' && NV && NV.pdfNaNuvem() ? '<button type="button" class="btn btn-sm" data-act="anexar-lote">Anexar PDFs em lote</button>' : '<span class="ajuda">Para anexar PDFs em lote, conecte a nuvem (Configurações › Nuvem e aparelhos).</span>'}</div>
       <label class="campo">Dados<textarea name="texto" rows="8" placeholder="Empresa;Contato;WhatsApp;Serviço;Pedido&#10;Exemplo Ltda;Fulano;11 99999-0000;AVCB;Renovar AVCB da loja"></textarea></label>
       <fieldset class="destaque"><legend>Padrões para o que não vier na planilha</legend><div class="grade g2">
         <label class="campo">Responsável<select name="responsavelId">${optEquipe(core.user().userId)}</select></label>
@@ -3812,7 +3812,7 @@ if (typeof module !== 'undefined') module.exports = WRDDemo;
       case 'abrir-op': abrirOportunidade(id, b.dataset.aba); break;
       case 'abrir-cli': abrirCliente(id); break;
       case 'nova-op': formOportunidade(); break;
-      case 'anexar-lote': anexarPdfsLote(); break;
+      case 'anexar-lote': document.querySelectorAll('.modal-fundo').forEach(x => x.remove()); anexarPdfsLote(); break;
       case 'novo-cli': formCliente(); break;
       case 'registrar': formAtividade(null, { feito: true }); break;
       case 'registrar-id': formAtividade(null, { feito: true, clienteId: id }); break;

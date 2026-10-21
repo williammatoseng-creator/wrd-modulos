@@ -4003,7 +4003,7 @@ if (typeof module !== 'undefined') module.exports = WRDDemo;
       case 'salvar-filtro': { const n = await pedirTexto('Salvar filtro', 'Dê um nome para este conjunto de filtros (fica disponível só para você).', { rotulo: 'Nome do filtro', botao: 'Salvar' }); if (n) { const r = await executar(() => core.salvarFiltro(UI.tela, n, filtrosDe(UI.tela)), {}, 'Filtro salvo.'); if (r.ok) refresh(); } break; }
       case 'remover-salvo': { const s = $('[data-act-sel="aplicar-salvo"]'); if (!s || !s.value) { toast('Escolha o filtro salvo na lista.', 'info'); break; } await executar(() => core.removerFiltro(s.value), {}, 'Filtro excluído.'); refresh(); break; }
       case 'novo-servico': formServico(null, a.dataset.cliente ? { clienteId: a.dataset.cliente } : null); break;
-      case 'anexar-lote': anexarPdfsLote(); break;
+      case 'anexar-lote': document.querySelectorAll('.modal-fundo').forEach(x => x.remove()); anexarPdfsLote(); break;
       case 'editar-servico': formServico(core.servicoDetalhe(id)); break;
       case 'condicao': mudarCondicao(id); break;
       case 'aceite': registrarAceite(id); break;
@@ -4087,7 +4087,7 @@ if (typeof module !== 'undefined') module.exports = WRDDemo;
     const colunas = () => core.MODELOS_LOTE[tipo].colunas.map(([id, rot, obr]) => `<li><code>${esc(id)}</code> — ${esc(rot)}${obr ? ' <span class="req">*</span>' : ''}</li>`).join('');
     const m = modal('Importar em lote', `<div class="grade">
       <div class="grade g2">${campo('O que importar', sel('tipo', tipos.map(([k, mm]) => opt(k, mm.rotulo, tipo)).join('')))}
-        <div class="campo"><span>Modelo da planilha</span><button type="button" class="btn" data-modelo>Baixar modelo (CSV para Excel)</button></div></div>
+        <div class="campo"><span>Modelo da planilha</span><button type="button" class="btn" data-modelo>Baixar modelo (CSV para Excel)</button></div>${typeof NV !== 'undefined' && NV && NV.pdfNaNuvem() && core.can('servico.salvar') ? '<div class="campo"><span>Arquivos PDF</span><button type="button" class="btn" data-act="anexar-lote">Anexar PDFs em lote</button></div>' : ''}</div>
       <details class="mais"><summary>Colunas aceitas (* obrigatória)</summary><ul class="lista-colunas" data-cols>${colunas()}</ul><p class="ajuda">A 1ª linha precisa ter os nomes das colunas (como no modelo). Datas em dd/mm/aaaa. Colunas desconhecidas são ignoradas.</p></details>
       <div class="campo"><span>Arquivo CSV</span><input type="file" accept=".csv,.txt,text/csv" data-arq-lote><span class="ajuda">No Excel: Arquivo › Salvar como › CSV (separado por ponto e vírgula). Arquivos .xlsx não são lidos diretamente.</span></div>
       ${campo('…ou cole aqui as células copiadas do Excel (com o cabeçalho)', area('texto', '', { rows: 6, ph: 'cliente;unidade;titulo;tipo;responsavel…' }))}
