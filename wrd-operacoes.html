@@ -823,7 +823,7 @@ const WRDNuvem = (function () {
       if (a === 'sair' && await o.confirmar('Desconectar este aparelho', 'Este aparelho deixa de sincronizar até você entrar de novo com o e-mail. Os dados na nuvem não são apagados.' + (sync && sync.situacao().pendente ? ' ATENÇÃO: há alteração ainda não enviada.' : ''), 'Desconectar')) { await cli.sair(); parar(); tela = 'entrar'; o.aoDesconectar(); }
     });
     document.addEventListener('submit', async e => {
-      const f = e.target.closest('form[data-nv-form]'); if (!f) return;
+      const f = e.target.closest('form[data-nv-form]'); if (!f || f.dataset.nvForm === 'lote') return; // o lote tem o seu próprio tratamento
       e.preventDefault(); e.stopPropagation();
       const d = Object.fromEntries(new FormData(f).entries()), b = f.querySelector('button.btn-primario');
       if (f.dataset.nvForm === 'entrar') { if (b) b.disabled = true; try { await cli.entrar(d.email, d.senha); conectar(); } catch (er) { o.toast(er.message, 'erro'); if (b) b.disabled = false; } }
@@ -1260,7 +1260,11 @@ const WRDOps = (function () {
     { area: 'Nuvem', regra: 'Gravação automática cerca de 1,5 s após cada alteração; os outros aparelhos recebem ao abrir a tela, a cada 60 s ou no botão Atualizar; sem internet, a alteração fica pendente e é enviada quando a conexão volta.', fonte: 'Pedido do William em 20/10/2026 (mesmas informações no PC e no celular, botão de atualização); intervalos definidos pelo executor', status: 'A VALIDAR' },
     { area: 'Nuvem', regra: 'Alteração simultânea em dois aparelhos: registros juntados pelo mais recente (updatedAt), contadores pelo maior valor e o restante pelo último gravado. Como nada é excluído (só arquivado), juntar não perde registro.', fonte: 'Definido pelo executor', status: 'A VALIDAR' },
     { area: 'Nuvem', regra: 'As 20 últimas versões de cada módulo ficam guardadas no banco como cópia de segurança; o backup JSON continua disponível.', fonte: 'Definido pelo executor (quantidade sem referência)', status: 'HIPÓTESE' },
-    { area: 'Nuvem', regra: 'Limites do plano gratuito do Supabase (armazenamento, pausa por inatividade).', fonte: 'Não conferidos na conta; consultar o painel do Supabase', status: 'NÃO INFORMADO' }
+    { area: 'Nuvem', regra: 'Limites do plano gratuito do Supabase (armazenamento, pausa por inatividade).', fonte: 'Não conferidos na conta; consultar o painel do Supabase', status: 'NÃO INFORMADO' },
+    { area: 'Anexos em lote', regra: 'PDFs anexados em lote são guardados em área privada da nuvem (bucket "documentos", pasta deste módulo); só membros do módulo leem ou enviam. O sistema não exclui PDF enviado.', fonte: 'Pedido do William em 20/10/2026 (importar arquivos em lote: PDF, seleção no PC, localização); desenho do executor, sem norma de referência', status: 'CONFIRMADO' },
+    { area: 'Anexos em lote', regra: 'Tamanho máximo de 25 MB por PDF, apenas arquivos .pdf; o link do arquivo é temporário (1 hora).', fonte: 'Definido pelo executor (limite de tamanho do armazenamento do bucket; plano gratuito não conferido)', status: 'HIPÓTESE' },
+    { area: 'Anexos em lote', regra: 'Localização de arquivo (caminho do PC ou da rede) é guardada como texto e não abre no celular; link https abre no navegador.', fonte: 'Pedido do William em 20/10/2026; limitação do navegador', status: 'CONFIRMADO' },
+    { area: 'Anexos em lote', regra: 'O registro sugerido pelo nome do arquivo usa o código ou o número de proposta/nota fiscal que aparece no nome; a escolha final é sempre do usuário.', fonte: 'Definido pelo executor', status: 'A VALIDAR' }
   ];
   const STATUS_REGRA = ['CONFIRMADO', 'A VALIDAR', 'HIPÓTESE', 'NÃO INFORMADO'];
   /** Eventos públicos do contrato nexo-plug/1: derivados das ações registradas no histórico (dados de usuário e senha nunca saem). */

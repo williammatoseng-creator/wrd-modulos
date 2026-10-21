@@ -666,6 +666,18 @@ const WRDNuvem = (function () {
       async ler() { const l = await http(`/rest/v1/estado_modulo?modulo=eq.${modulo}&select=dados,versao,atualizado_em,aparelho`, { method: 'GET' }, true); return l && l[0] ? l[0] : null; },
       async salvar(dados, versao, aparelho) { return http('/rest/v1/rpc/salvar_estado', { method: 'POST', body: JSON.stringify({ p_modulo: modulo, p_dados: dados, p_versao: versao, p_aparelho: aparelho || null }) }, true); },
       async uso() { return http('/rest/v1/rpc/uso_modulos', { method: 'POST', body: '{}' }, true); },
+      /** Envia um PDF ao bucket privado "documentos" (pasta do módulo). Devolve o caminho guardado no registro. */
+      async enviarPdf(blob) {
+        await garantirToken();
+        const caminho = modulo + '/' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10) + '.pdf';
+        let r;
+        try { r = await f(CONFIG.url + '/storage/v1/object/documentos/' + caminho, { method: 'POST', headers: { apikey: CONFIG.chave, Authorization: 'Bearer ' + sessao.access_token, 'Content-Type': 'application/pdf' }, body: blob }); }
+        catch (e) { throw erro('Sem conexão com a nuvem.', 'OFFLINE'); }
+        if (!r.ok) { const t = await r.text(); throw erro(/exceeded|too large|size/i.test(t) ? 'O PDF passa do limite de 25 MB.' : 'Não foi possível enviar o arquivo (' + r.status + ').', 'ENVIO'); }
+        return caminho;
+      },
+      /** Link temporário (1 hora) para abrir um PDF do bucket privado. */
+      async linkPdf(caminho) { const j = await http('/storage/v1/object/sign/documentos/' + caminho, { method: 'POST', body: JSON.stringify({ expiresIn: 3600 }) }, true); return CONFIG.url + '/storage/v1' + j.signedURL; },
       async adicionarMembro(email, papel) { return http('/rest/v1/rpc/adicionar_membro', { method: 'POST', body: JSON.stringify({ p_email: email, p_modulo: modulo, p_papel: papel || 'membro' }) }, true); }
     };
   }
@@ -814,7 +826,7 @@ const WRDNuvem = (function () {
       if (a === 'sair' && await o.confirmar('Desconectar este aparelho', 'Este aparelho deixa de sincronizar até você entrar de novo com o e-mail. Os dados na nuvem não são apagados.' + (sync && sync.situacao().pendente ? ' ATENÇÃO: há alteração ainda não enviada.' : ''), 'Desconectar')) { await cli.sair(); parar(); tela = 'entrar'; o.aoDesconectar(); }
     });
     document.addEventListener('submit', async e => {
-      const f = e.target.closest('form[data-nv-form]'); if (!f) return;
+      const f = e.target.closest('form[data-nv-form]'); if (!f || f.dataset.nvForm === 'lote') return; // o lote tem o seu próprio tratamento
       e.preventDefault(); e.stopPropagation();
       const d = Object.fromEntries(new FormData(f).entries()), b = f.querySelector('button.btn-primario');
       if (f.dataset.nvForm === 'entrar') { if (b) b.disabled = true; try { await cli.entrar(d.email, d.senha); conectar(); } catch (er) { o.toast(er.message, 'erro'); if (b) b.disabled = false; } }
@@ -860,7 +872,103 @@ const WRDNuvem = (function () {
           <h3>Uso por módulo</h3><div data-nv-uso><p class="muted">Carregando…</p></div>` : ''}`;
     }
     const posRender = () => { pintar(); if (document.querySelector('[data-nv-uso]')) pintarUso(); };
-    return { disponivel, abrir, parar, telaHTML, botaoTopo, abaConfig, posRender, ativo: () => !!sync, situacao: () => (sync ? sync.situacao() : null) };
+    /** HTML de um anexo que está na nuvem (PDF). Anexos de link/localização são tratados pelo próprio módulo. */
+    function anexoHTML(a) {
+      if (a.nuvem) return `<a href="#" data-nv-abrir="${esc(a.nuvem)}">${esc(a.nome)}</a> <span class="muted xs">(PDF na nuvem)</span>`;
+      return '';
+    }
+    /** Pode anexar PDFs na nuvem agora? (precisa estar conectado; sem nuvem, só links e localizações) */
+    const pdfNaNuvem = () => !!(sync && cli && cli.conectado());
+    /**
+     * Janela de anexos em lote. opts: { alvos:[{id, rotulo, pista}], aceitaCaminho, gravar(alvoId, anexos) }
+     * Cada linha é um PDF (enviado à nuvem) ou um link/localização. A pista (ex.: número da proposta) sugere o registro pelo nome do arquivo.
+     */
+    function anexarLote(opts) {
+      const alvos = opts.alvos || [];
+      const LIMITE = 25 * 1024 * 1024;
+      const m = o.abrirModal('Anexar PDFs em lote', `<form class="grade" data-nv-form="lote">
+        <p class="ajuda">Escolha os PDFs do seu computador. Cada arquivo vai para o registro escolhido. O sistema sugere o registro pelo código que aparece no nome do arquivo (ex.: 201104-1.pdf). Também pode incluir um link ou localização sem arquivo.</p>
+        ${pdfNaNuvem() ? '<label class="campo">Arquivos PDF (até 25 MB cada)<input type="file" accept="application/pdf,.pdf" multiple data-nv-arquivos></label>' : '<p class="aviso">Para enviar PDFs, conecte a nuvem (Configurações › Nuvem e aparelhos). Sem nuvem, use o link ou a localização.</p>'}
+        <div data-nv-linhas></div>
+        <div class="linha"><button type="button" class="btn btn-sm" data-nv-add-link>+ Link ou localização sem arquivo</button></div>
+        <div class="linha fim"><button type="button" class="btn" data-fechar>Cancelar</button><button class="btn btn-primario" data-nv-ok>Anexar tudo</button></div></form>`);
+      const form = m.el.querySelector('form'), linhas = [];
+      const alvoPorPista = nome => { const n = nome.toLowerCase(); let melhor = null; for (const a of alvos) { for (const p0 of [].concat(a.pistas || a.pista || [])) { const p = String(p0 || '').toLowerCase(); if (p && n.includes(p) && (!melhor || p.length > melhor.len)) melhor = { id: a.id, len: p.length }; } } return melhor ? melhor.id : ''; };
+      const opcoes = sel => '<option value="">Escolha o registro…</option>' + alvos.map(a => `<option value="${esc(a.id)}"${a.id === sel ? ' selected' : ''}>${esc(a.rotulo)}</option>`).join('');
+      const ehLink = t => /^https?:\/\/\S+$/i.test(t);
+      function desenhar() {
+        m.el.querySelector('[data-nv-linhas]').innerHTML = linhas.map((l, i) => `<div class="linha" data-nv-linha="${i}">
+          <input name="nome" value="${esc(l.nome)}" placeholder="Nome do documento" aria-label="Nome do documento">
+          <select name="alvo" aria-label="Registro">${opcoes(l.alvo)}</select>
+          <input name="link" value="${esc(l.link)}" placeholder="${opts.aceitaCaminho ? 'Link https:// ou localização' : 'Link https://'}" aria-label="Link ou localização">
+          <button type="button" class="btn btn-sm" data-nv-rm="${i}" aria-label="Remover linha">×</button>
+          ${l.arquivo ? `<span class="muted xs">${esc(l.arquivo.name)} · ${Math.round(l.arquivo.size / 1024)} KB</span>` : ''}</div>`).join('');
+      }
+      function ler() { linhas.forEach((l, i) => { const el = m.el.querySelector(`[data-nv-linha="${i}"]`); if (!el) return; l.nome = el.querySelector('[name=nome]').value.trim(); l.alvo = el.querySelector('[name=alvo]').value; l.link = el.querySelector('[name=link]').value.trim(); }); }
+      m.el.querySelector('[data-nv-add-link]').onclick = () => { ler(); linhas.push({ nome: '', alvo: '', link: '' }); desenhar(); };
+      m.el.addEventListener('click', e => { const b = e.target.closest('[data-nv-rm]'); if (b) { ler(); linhas.splice(+b.dataset.nvRm, 1); desenhar(); } });
+      const arq = m.el.querySelector('[data-nv-arquivos]');
+      if (arq) arq.onchange = () => {
+        ler();
+        for (const f of arq.files) {
+          if (!/\.pdf$/i.test(f.name) && f.type !== 'application/pdf') { o.toast(`"${f.name}" não é PDF e foi ignorado.`, 'erro'); continue; }
+          if (f.size > LIMITE) { o.toast(`"${f.name}" passa de 25 MB e foi ignorado.`, 'erro'); continue; }
+          const nome = f.name.replace(/\.pdf$/i, '');
+          linhas.push({ nome, alvo: alvoPorPista(nome), link: '', arquivo: f });
+        }
+        arq.value = ''; desenhar();
+      };
+      desenhar();
+      form.addEventListener('submit', async e => {
+        e.preventDefault(); ler();
+        const erros = [];
+        linhas.forEach((l, i) => {
+          if (!l.nome) erros.push(`Linha ${i + 1}: informe o nome.`);
+          if (!l.alvo) erros.push(`Linha ${i + 1}: escolha o registro.`);
+          if (!l.arquivo && !l.link) erros.push(`Linha ${i + 1}: informe o arquivo ou o link.`);
+          if (l.link && !ehLink(l.link) && !(opts.aceitaCaminho && !/[\r\n\t]/.test(l.link) && l.link.length <= 500)) erros.push(`Linha ${i + 1}: o link deve começar com https://${opts.aceitaCaminho ? ' ou ser uma localização em uma linha só' : ''}.`);
+          if (l.arquivo && !pdfNaNuvem()) erros.push(`Linha ${i + 1}: conecte a nuvem para enviar o PDF.`);
+        });
+        if (linhas.length === 0) erros.push('Escolha pelo menos um PDF ou inclua um link.');
+        if (erros.length) { o.toast(erros[0] + (erros.length > 1 ? ` (+${erros.length - 1})` : ''), 'erro'); return; }
+        const btn = m.el.querySelector('[data-nv-ok]'); btn.disabled = true;
+        const totalArquivos = linhas.filter(x => x.arquivo).length;
+        const porAlvo = new Map(); let enviados = 0;
+        try {
+          for (const l of linhas) {
+            const lista = porAlvo.get(l.alvo) || []; porAlvo.set(l.alvo, lista);
+            if (l.arquivo) {
+              btn.textContent = `Enviando ${enviados + 1} de ${totalArquivos}…`;
+              const caminho = await cli.enviarPdf(l.arquivo);
+              enviados++;
+              lista.push({ nome: l.nome, tipo: 'application/pdf', tamanho: l.arquivo.size, nuvem: caminho });
+              if (l.link) lista.push(ehLink(l.link) ? { nome: l.nome + ' (link)', url: l.link } : { nome: l.nome + ' (localização)', caminho: l.link });
+            } else {
+              lista.push(ehLink(l.link) ? { nome: l.nome, url: l.link } : { nome: l.nome, caminho: l.link });
+            }
+          }
+          for (const [alvo, lista] of porAlvo) await opts.gravar(alvo, lista);
+          m.fechar();
+          o.toast(`${linhas.length} anexo(s) incluído(s) em ${porAlvo.size} registro(s).`, 'ok');
+          if (opts.depois) opts.depois();
+        } catch (er) {
+          btn.disabled = false; btn.textContent = 'Anexar tudo';
+          o.toast(er.message, 'erro');
+        }
+      });
+      return m;
+    }
+
+    // abrir PDF da nuvem: link temporário, em nova aba (a aba é aberta antes, para o navegador não bloquear)
+    document.addEventListener('click', async e => {
+      const a = e.target.closest('[data-nv-abrir]'); if (!a) return;
+      e.preventDefault();
+      const janela = window.open('', '_blank', 'noopener');
+      try { const url = await cli.linkPdf(a.dataset.nvAbrir); if (janela) janela.location = url; else window.open(url, '_blank', 'noopener'); }
+      catch (er) { if (janela) janela.close(); o.toast(er.message, 'erro'); }
+    });
+
+    return { disponivel, abrir, parar, telaHTML, botaoTopo, abaConfig, posRender, ativo: () => !!sync, situacao: () => (sync ? sync.situacao() : null), anexoHTML, pdfNaNuvem, anexarLote };
   }
 
   return { CONFIG, cliente, sincronizador, mesclar, integrar, MSG };
@@ -1126,7 +1234,11 @@ const WRDCom = (function () {
     { area: 'Nuvem', regra: 'Gravação automática cerca de 1,5 s após cada alteração; os outros aparelhos recebem ao abrir a tela, a cada 60 s ou no botão Atualizar; sem internet, a alteração fica pendente e é enviada quando a conexão volta.', fonte: 'Pedido do William em 20/10/2026 (mesmas informações no PC e no celular, botão de atualização); intervalos definidos pelo executor', status: 'A VALIDAR' },
     { area: 'Nuvem', regra: 'Alteração simultânea em dois aparelhos: registros juntados pelo mais recente (updatedAt), contadores pelo maior valor e o restante pelo último gravado. Como nada é excluído (só arquivado), juntar não perde registro.', fonte: 'Definido pelo executor', status: 'A VALIDAR' },
     { area: 'Nuvem', regra: 'As 20 últimas versões de cada módulo ficam guardadas no banco como cópia de segurança; o backup JSON continua disponível.', fonte: 'Definido pelo executor (quantidade sem referência)', status: 'HIPÓTESE' },
-    { area: 'Nuvem', regra: 'Limites do plano gratuito do Supabase (armazenamento, pausa por inatividade).', fonte: 'Não conferidos na conta; consultar o painel do Supabase', status: 'NÃO INFORMADO' }
+    { area: 'Nuvem', regra: 'Limites do plano gratuito do Supabase (armazenamento, pausa por inatividade).', fonte: 'Não conferidos na conta; consultar o painel do Supabase', status: 'NÃO INFORMADO' },
+    { area: 'Anexos em lote', regra: 'PDFs anexados em lote são guardados em área privada da nuvem (bucket "documentos", pasta deste módulo); só membros do módulo leem ou enviam. O sistema não exclui PDF enviado.', fonte: 'Pedido do William em 20/10/2026 (importar arquivos em lote: PDF, seleção no PC, localização); desenho do executor, sem norma de referência', status: 'CONFIRMADO' },
+    { area: 'Anexos em lote', regra: 'Tamanho máximo de 25 MB por PDF, apenas arquivos .pdf; o link do arquivo é temporário (1 hora).', fonte: 'Definido pelo executor (limite de tamanho do armazenamento do bucket; plano gratuito não conferido)', status: 'HIPÓTESE' },
+    { area: 'Anexos em lote', regra: 'Localização de arquivo (caminho do PC ou da rede) é guardada como texto e não abre no celular; link https abre no navegador.', fonte: 'Pedido do William em 20/10/2026; limitação do navegador', status: 'CONFIRMADO' },
+    { area: 'Anexos em lote', regra: 'O registro sugerido pelo nome do arquivo usa o código ou o número de proposta/nota fiscal que aparece no nome; a escolha final é sempre do usuário.', fonte: 'Definido pelo executor', status: 'A VALIDAR' }
   ];
   const STATUS_REGRA = ['CONFIRMADO', 'A VALIDAR', 'HIPÓTESE', 'NÃO INFORMADO'];
 
@@ -1365,6 +1477,40 @@ const WRDCom = (function () {
         const tam = Math.floor((a.conteudo.length - a.conteudo.indexOf(',') - 1) * 3 / 4);
         if (tam > LIMITE_ANEXO) fail(`O anexo "${nome}" passa de 500 KB. Guarde o arquivo no Drive e anexe o link.`);
         return { id: a.id || uid('anx'), nome, tipo: txt(a.tipo), tamanho: tam, conteudo: a.conteudo, ts: a.ts || nowISO(), autor: a.autor || (u ? u.nome : '') };
+      });
+    }
+    /** Anexo do lote: PDF na pasta do módulo na nuvem, link https. Nunca aceita conteúdo embutido. */
+    const LIMITE_PDF = 25 * 1024 * 1024;
+    function validarAnexosLote(lista) {
+      if (!Array.isArray(lista) || !lista.length) fail('Nenhum anexo para incluir.');
+      const u = user();
+      return lista.map(a => {
+        const nome = txt(a && a.nome);
+        if (!nome) fail('Anexo sem nome.');
+        const base = { id: uid('anx'), nome, ts: nowISO(), autor: u ? u.nome : '' };
+        if (a.nuvem) {
+          if (!/^comercial\/[a-z0-9-]+\.pdf$/.test(String(a.nuvem))) fail(`O arquivo "${nome}" não está na pasta deste módulo.`);
+          if (!(a.tamanho > 0) || a.tamanho > LIMITE_PDF) fail(`O arquivo "${nome}" passa de 25 MB.`);
+          return Object.assign(base, { tipo: 'application/pdf', tamanho: a.tamanho, nuvem: String(a.nuvem) });
+        }
+        if (a.url) {
+          if (!/^https?:\/\/\S+$/i.test(a.url)) fail(`O link do anexo "${nome}" deve começar com http:// ou https://.`);
+          return Object.assign(base, { url: String(a.url) });
+        }
+        fail(`O anexo "${nome}" precisa de um arquivo na nuvem ou de um link.`);
+      });
+    }
+    /** Acrescenta anexos a uma oportunidade sem apagar os existentes. Mesmas regras de edição da oportunidade. */
+    function acrescentarAnexosOport(id, lista) {
+      const o = exigirOport(id);
+      guardDono('oport.salvar', o, 'esta oportunidade');
+      if (tipoEtapa(o) !== 'aberta' && !isAdmin()) fail('Oportunidade fechada: só um administrador anexa. Para continuar negociando, reabra.', 'PERMISSAO');
+      const novos = validarAnexosLote(lista);
+      return mutate(() => {
+        o.anexos = (o.anexos || []).concat(novos);
+        o.updatedAt = nowISO();
+        log({ acao: 'oportunidade.anexo', entidade: 'oportunidade', entidadeId: o.id, codigo: o.codigo, oportunidadeId: o.id, clienteId: o.clienteId, detalhe: `${novos.length} anexo(s) incluído(s): ${novos.map(a => a.nome).join('; ')}` });
+        return { id, quantidade: novos.length };
       });
     }
     function validarData(v, rot, obrig) {
@@ -2638,7 +2784,7 @@ const WRDCom = (function () {
       salvarVencimento, listarVencimentos, oportunidadeDeVencimento, numeracao, salvarNumeracao, preverLote, importarLote, COLS_LOTE,
       silenciar, alertas, agenda, indicadores, getKPIs,
       relatorio, emitirNumeroRelatorio, csvRelatorio, historico, busca,
-      exportarJSON, importarJSON, getState, exportar, REGRAS, STATUS_REGRA
+      exportarJSON, importarJSON, getState, exportar, REGRAS, STATUS_REGRA, acrescentarAnexosOport
     };
   }
 
@@ -2874,7 +3020,14 @@ if (typeof module !== 'undefined') module.exports = WRDDemo;
       });
     }
   }
-  const listaAnexos = l => (l && l.length ? `<ul class="lista-anexos">${l.map(a => `<li>${a.url ? `<a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.nome)}</a>` : `<a href="${a.conteudo}" download="${esc(a.nome)}">${esc(a.nome)}</a>`}</li>`).join('')}</ul>` : '<p class="muted peq">Nenhum anexo.</p>');
+  const listaAnexos = l => (l && l.length ? `<ul class="lista-anexos">${l.map(a => `<li>${a.nuvem ? (typeof NV !== 'undefined' && NV ? NV.anexoHTML(a) : esc(a.nome)) : a.url ? `<a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.nome)}</a>${/\(link\)$/.test(a.nome) ? '' : ' <span class="muted xs">(link)</span>'}` : a.caminho ? `${esc(a.nome)} <code>${esc(a.caminho)}</code> <span class="muted xs">(localização)</span>` : `<a href="${a.conteudo}" download="${esc(a.nome)}">${esc(a.nome)}</a>`}</li>`).join('')}</ul>` : '<p class="muted peq">Nenhum anexo.</p>');
+
+  /** Anexos em lote: cada PDF vai para a oportunidade cujo código ou número de proposta aparece no nome do arquivo. */
+  function anexarPdfsLote() {
+    const ops = core.listarOportunidades({}).filter(x => x.aberta);
+    const alvos = ops.map(x => ({ id: x.id, rotulo: `${x.codigo} · ${x.clienteNome || ''} — ${x.titulo || ''}`, pistas: [x.codigo].concat(core.listarPropostas({ oportunidadeId: x.id }).map(p => p.numero)) }));
+    NV.anexarLote({ alvos, aceitaCaminho: false, depois: () => refrescar(), gravar: (id, lista) => { core.acrescentarAnexosOport(id, lista); } });
+  }
 
   /* ---------- formulários ---------- */
   const dadosForm = f => Object.fromEntries(new FormData(f));
@@ -3370,7 +3523,7 @@ if (typeof module !== 'undefined') module.exports = WRDDemo;
       corpo = `<p class="legenda-farol" aria-label="Legenda do farol"><span class="lf farol-verde">em dia</span><span class="lf farol-amarelo">atenção (hoje, rascunho, parada, vence logo, passagem pendente)</span><span class="lf farol-vermelho">atrasado, sem próxima ação ou proposta vencida</span></p><p class="ajuda">Arraste o cartão para mudar de etapa (no celular, abra o cartão e troque a etapa). Colunas Ganha e Perdida mostram fechamentos dos últimos 30 dias, salvo filtro de período. Valor por coluna = soma do valor no funil (revisão vigente ou estimado; nunca soma revisões).</p>
         <div class="kanban" style="grid-template-columns:repeat(${k.length}, minmax(var(--min-coluna-kanban), 1fr))">${k.map(col => `<section class="col" data-etapa="${col.etapa.id}" aria-label="${esc(col.etapa.rotulo)}"><h2><span>${esc(col.etapa.rotulo)}</span><span class="chip-n">${col.cards.length}</span></h2><div class="col-total">${fm(col.total)}</div><div class="col-corpo">${col.cards.length ? col.cards.map(cartao).join('') : '<p class="vazio-col">—</p>'}</div></section>`).join('')}</div>`;
     } else corpo = tabelaOports(core.listarOportunidades(Object.assign({ incluirFechadas: true }, f)));
-    return `<div class="cab-tela"><h1>Funil comercial</h1><div class="linha"><div class="alternar" role="group" aria-label="Visualização"><button data-act="vista" data-v="kanban" aria-pressed="${UI.vista === 'kanban'}">Kanban</button><button data-act="vista" data-v="lista" aria-pressed="${UI.vista === 'lista'}">Lista</button></div><button class="btn btn-primario" data-act="nova-op">+ Oportunidade</button>${core.can('importar') ? '<button class="btn" data-act="importar">Importar em lote</button>' : ''}</div></div>
+    return `<div class="cab-tela"><h1>Funil comercial</h1>${typeof NV !== 'undefined' && NV && NV.pdfNaNuvem() && core.can('oport.salvar') ? '<button class="btn btn-sm" data-act="anexar-lote">Anexar PDFs em lote</button>' : ''}<div class="linha"><div class="alternar" role="group" aria-label="Visualização"><button data-act="vista" data-v="kanban" aria-pressed="${UI.vista === 'kanban'}">Kanban</button><button data-act="vista" data-v="lista" aria-pressed="${UI.vista === 'lista'}">Lista</button></div><button class="btn btn-primario" data-act="nova-op">+ Oportunidade</button>${core.can('importar') ? '<button class="btn" data-act="importar">Importar em lote</button>' : ''}</div></div>
       ${filtrosHTML('funil', ['busca', 'clienteId', 'responsavelId', 'servicoId', 'origem', 'prioridade', ...(UI.vista === 'lista' ? ['situacaoOp', 'etapaId'] : []), 'periodo', 'atrasadas'])}${corpo}`;
   }
   function cartao(o) {
@@ -3659,6 +3812,7 @@ if (typeof module !== 'undefined') module.exports = WRDDemo;
       case 'abrir-op': abrirOportunidade(id, b.dataset.aba); break;
       case 'abrir-cli': abrirCliente(id); break;
       case 'nova-op': formOportunidade(); break;
+      case 'anexar-lote': anexarPdfsLote(); break;
       case 'novo-cli': formCliente(); break;
       case 'registrar': formAtividade(null, { feito: true }); break;
       case 'registrar-id': formAtividade(null, { feito: true, clienteId: id }); break;

@@ -552,6 +552,18 @@ const WRDNuvem = (function () {
       async ler() { const l = await http(`/rest/v1/estado_modulo?modulo=eq.${modulo}&select=dados,versao,atualizado_em,aparelho`, { method: 'GET' }, true); return l && l[0] ? l[0] : null; },
       async salvar(dados, versao, aparelho) { return http('/rest/v1/rpc/salvar_estado', { method: 'POST', body: JSON.stringify({ p_modulo: modulo, p_dados: dados, p_versao: versao, p_aparelho: aparelho || null }) }, true); },
       async uso() { return http('/rest/v1/rpc/uso_modulos', { method: 'POST', body: '{}' }, true); },
+      /** Envia um PDF ao bucket privado "documentos" (pasta do módulo). Devolve o caminho guardado no registro. */
+      async enviarPdf(blob) {
+        await garantirToken();
+        const caminho = modulo + '/' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10) + '.pdf';
+        let r;
+        try { r = await f(CONFIG.url + '/storage/v1/object/documentos/' + caminho, { method: 'POST', headers: { apikey: CONFIG.chave, Authorization: 'Bearer ' + sessao.access_token, 'Content-Type': 'application/pdf' }, body: blob }); }
+        catch (e) { throw erro('Sem conexão com a nuvem.', 'OFFLINE'); }
+        if (!r.ok) { const t = await r.text(); throw erro(/exceeded|too large|size/i.test(t) ? 'O PDF passa do limite de 25 MB.' : 'Não foi possível enviar o arquivo (' + r.status + ').', 'ENVIO'); }
+        return caminho;
+      },
+      /** Link temporário (1 hora) para abrir um PDF do bucket privado. */
+      async linkPdf(caminho) { const j = await http('/storage/v1/object/sign/documentos/' + caminho, { method: 'POST', body: JSON.stringify({ expiresIn: 3600 }) }, true); return CONFIG.url + '/storage/v1' + j.signedURL; },
       async adicionarMembro(email, papel) { return http('/rest/v1/rpc/adicionar_membro', { method: 'POST', body: JSON.stringify({ p_email: email, p_modulo: modulo, p_papel: papel || 'membro' }) }, true); }
     };
   }
@@ -700,7 +712,7 @@ const WRDNuvem = (function () {
       if (a === 'sair' && await o.confirmar('Desconectar este aparelho', 'Este aparelho deixa de sincronizar até você entrar de novo com o e-mail. Os dados na nuvem não são apagados.' + (sync && sync.situacao().pendente ? ' ATENÇÃO: há alteração ainda não enviada.' : ''), 'Desconectar')) { await cli.sair(); parar(); tela = 'entrar'; o.aoDesconectar(); }
     });
     document.addEventListener('submit', async e => {
-      const f = e.target.closest('form[data-nv-form]'); if (!f) return;
+      const f = e.target.closest('form[data-nv-form]'); if (!f || f.dataset.nvForm === 'lote') return; // o lote tem o seu próprio tratamento
       e.preventDefault(); e.stopPropagation();
       const d = Object.fromEntries(new FormData(f).entries()), b = f.querySelector('button.btn-primario');
       if (f.dataset.nvForm === 'entrar') { if (b) b.disabled = true; try { await cli.entrar(d.email, d.senha); conectar(); } catch (er) { o.toast(er.message, 'erro'); if (b) b.disabled = false; } }
@@ -746,7 +758,103 @@ const WRDNuvem = (function () {
           <h3>Uso por módulo</h3><div data-nv-uso><p class="muted">Carregando…</p></div>` : ''}`;
     }
     const posRender = () => { pintar(); if (document.querySelector('[data-nv-uso]')) pintarUso(); };
-    return { disponivel, abrir, parar, telaHTML, botaoTopo, abaConfig, posRender, ativo: () => !!sync, situacao: () => (sync ? sync.situacao() : null) };
+    /** HTML de um anexo que está na nuvem (PDF). Anexos de link/localização são tratados pelo próprio módulo. */
+    function anexoHTML(a) {
+      if (a.nuvem) return `<a href="#" data-nv-abrir="${esc(a.nuvem)}">${esc(a.nome)}</a> <span class="muted xs">(PDF na nuvem)</span>`;
+      return '';
+    }
+    /** Pode anexar PDFs na nuvem agora? (precisa estar conectado; sem nuvem, só links e localizações) */
+    const pdfNaNuvem = () => !!(sync && cli && cli.conectado());
+    /**
+     * Janela de anexos em lote. opts: { alvos:[{id, rotulo, pista}], aceitaCaminho, gravar(alvoId, anexos) }
+     * Cada linha é um PDF (enviado à nuvem) ou um link/localização. A pista (ex.: número da proposta) sugere o registro pelo nome do arquivo.
+     */
+    function anexarLote(opts) {
+      const alvos = opts.alvos || [];
+      const LIMITE = 25 * 1024 * 1024;
+      const m = o.abrirModal('Anexar PDFs em lote', `<form class="grade" data-nv-form="lote">
+        <p class="ajuda">Escolha os PDFs do seu computador. Cada arquivo vai para o registro escolhido. O sistema sugere o registro pelo código que aparece no nome do arquivo (ex.: 201104-1.pdf). Também pode incluir um link ou localização sem arquivo.</p>
+        ${pdfNaNuvem() ? '<label class="campo">Arquivos PDF (até 25 MB cada)<input type="file" accept="application/pdf,.pdf" multiple data-nv-arquivos></label>' : '<p class="aviso">Para enviar PDFs, conecte a nuvem (Configurações › Nuvem e aparelhos). Sem nuvem, use o link ou a localização.</p>'}
+        <div data-nv-linhas></div>
+        <div class="linha"><button type="button" class="btn btn-sm" data-nv-add-link>+ Link ou localização sem arquivo</button></div>
+        <div class="linha fim"><button type="button" class="btn" data-fechar>Cancelar</button><button class="btn btn-primario" data-nv-ok>Anexar tudo</button></div></form>`);
+      const form = m.el.querySelector('form'), linhas = [];
+      const alvoPorPista = nome => { const n = nome.toLowerCase(); let melhor = null; for (const a of alvos) { for (const p0 of [].concat(a.pistas || a.pista || [])) { const p = String(p0 || '').toLowerCase(); if (p && n.includes(p) && (!melhor || p.length > melhor.len)) melhor = { id: a.id, len: p.length }; } } return melhor ? melhor.id : ''; };
+      const opcoes = sel => '<option value="">Escolha o registro…</option>' + alvos.map(a => `<option value="${esc(a.id)}"${a.id === sel ? ' selected' : ''}>${esc(a.rotulo)}</option>`).join('');
+      const ehLink = t => /^https?:\/\/\S+$/i.test(t);
+      function desenhar() {
+        m.el.querySelector('[data-nv-linhas]').innerHTML = linhas.map((l, i) => `<div class="linha" data-nv-linha="${i}">
+          <input name="nome" value="${esc(l.nome)}" placeholder="Nome do documento" aria-label="Nome do documento">
+          <select name="alvo" aria-label="Registro">${opcoes(l.alvo)}</select>
+          <input name="link" value="${esc(l.link)}" placeholder="${opts.aceitaCaminho ? 'Link https:// ou localização' : 'Link https://'}" aria-label="Link ou localização">
+          <button type="button" class="btn btn-sm" data-nv-rm="${i}" aria-label="Remover linha">×</button>
+          ${l.arquivo ? `<span class="muted xs">${esc(l.arquivo.name)} · ${Math.round(l.arquivo.size / 1024)} KB</span>` : ''}</div>`).join('');
+      }
+      function ler() { linhas.forEach((l, i) => { const el = m.el.querySelector(`[data-nv-linha="${i}"]`); if (!el) return; l.nome = el.querySelector('[name=nome]').value.trim(); l.alvo = el.querySelector('[name=alvo]').value; l.link = el.querySelector('[name=link]').value.trim(); }); }
+      m.el.querySelector('[data-nv-add-link]').onclick = () => { ler(); linhas.push({ nome: '', alvo: '', link: '' }); desenhar(); };
+      m.el.addEventListener('click', e => { const b = e.target.closest('[data-nv-rm]'); if (b) { ler(); linhas.splice(+b.dataset.nvRm, 1); desenhar(); } });
+      const arq = m.el.querySelector('[data-nv-arquivos]');
+      if (arq) arq.onchange = () => {
+        ler();
+        for (const f of arq.files) {
+          if (!/\.pdf$/i.test(f.name) && f.type !== 'application/pdf') { o.toast(`"${f.name}" não é PDF e foi ignorado.`, 'erro'); continue; }
+          if (f.size > LIMITE) { o.toast(`"${f.name}" passa de 25 MB e foi ignorado.`, 'erro'); continue; }
+          const nome = f.name.replace(/\.pdf$/i, '');
+          linhas.push({ nome, alvo: alvoPorPista(nome), link: '', arquivo: f });
+        }
+        arq.value = ''; desenhar();
+      };
+      desenhar();
+      form.addEventListener('submit', async e => {
+        e.preventDefault(); ler();
+        const erros = [];
+        linhas.forEach((l, i) => {
+          if (!l.nome) erros.push(`Linha ${i + 1}: informe o nome.`);
+          if (!l.alvo) erros.push(`Linha ${i + 1}: escolha o registro.`);
+          if (!l.arquivo && !l.link) erros.push(`Linha ${i + 1}: informe o arquivo ou o link.`);
+          if (l.link && !ehLink(l.link) && !(opts.aceitaCaminho && !/[\r\n\t]/.test(l.link) && l.link.length <= 500)) erros.push(`Linha ${i + 1}: o link deve começar com https://${opts.aceitaCaminho ? ' ou ser uma localização em uma linha só' : ''}.`);
+          if (l.arquivo && !pdfNaNuvem()) erros.push(`Linha ${i + 1}: conecte a nuvem para enviar o PDF.`);
+        });
+        if (linhas.length === 0) erros.push('Escolha pelo menos um PDF ou inclua um link.');
+        if (erros.length) { o.toast(erros[0] + (erros.length > 1 ? ` (+${erros.length - 1})` : ''), 'erro'); return; }
+        const btn = m.el.querySelector('[data-nv-ok]'); btn.disabled = true;
+        const totalArquivos = linhas.filter(x => x.arquivo).length;
+        const porAlvo = new Map(); let enviados = 0;
+        try {
+          for (const l of linhas) {
+            const lista = porAlvo.get(l.alvo) || []; porAlvo.set(l.alvo, lista);
+            if (l.arquivo) {
+              btn.textContent = `Enviando ${enviados + 1} de ${totalArquivos}…`;
+              const caminho = await cli.enviarPdf(l.arquivo);
+              enviados++;
+              lista.push({ nome: l.nome, tipo: 'application/pdf', tamanho: l.arquivo.size, nuvem: caminho });
+              if (l.link) lista.push(ehLink(l.link) ? { nome: l.nome + ' (link)', url: l.link } : { nome: l.nome + ' (localização)', caminho: l.link });
+            } else {
+              lista.push(ehLink(l.link) ? { nome: l.nome, url: l.link } : { nome: l.nome, caminho: l.link });
+            }
+          }
+          for (const [alvo, lista] of porAlvo) await opts.gravar(alvo, lista);
+          m.fechar();
+          o.toast(`${linhas.length} anexo(s) incluído(s) em ${porAlvo.size} registro(s).`, 'ok');
+          if (opts.depois) opts.depois();
+        } catch (er) {
+          btn.disabled = false; btn.textContent = 'Anexar tudo';
+          o.toast(er.message, 'erro');
+        }
+      });
+      return m;
+    }
+
+    // abrir PDF da nuvem: link temporário, em nova aba (a aba é aberta antes, para o navegador não bloquear)
+    document.addEventListener('click', async e => {
+      const a = e.target.closest('[data-nv-abrir]'); if (!a) return;
+      e.preventDefault();
+      const janela = window.open('', '_blank', 'noopener');
+      try { const url = await cli.linkPdf(a.dataset.nvAbrir); if (janela) janela.location = url; else window.open(url, '_blank', 'noopener'); }
+      catch (er) { if (janela) janela.close(); o.toast(er.message, 'erro'); }
+    });
+
+    return { disponivel, abrir, parar, telaHTML, botaoTopo, abaConfig, posRender, ativo: () => !!sync, situacao: () => (sync ? sync.situacao() : null), anexoHTML, pdfNaNuvem, anexarLote };
   }
 
   return { CONFIG, cliente, sincronizador, mesclar, integrar, MSG };
@@ -942,9 +1050,9 @@ const WRDCore = (function () {
     { area: 'Projeção', regra: 'Saldo projetado = saldo atual + em aberto a receber − em aberto a pagar com vencimento até a data; vencidos em aberto entram como de hoje.', fonte: 'Pedido original, item 7; ' + AP19 + ' (vencidos como de hoje)', status: 'CONFIRMADO' },
     { area: 'Prazos', regra: 'Vencido = vencimento anterior a hoje no fuso configurado (padrão America/Sao_Paulo). Vence hoje não é atraso.', fonte: 'Pedido original (protocolo, item 6)', status: 'CONFIRMADO' },
     { area: 'Lançamentos', regra: 'Parcelamento: total ÷ nº de parcelas, em centavos; a sobra de centavos vai para as primeiras parcelas e a soma é o total exato.', fonte: AP19, status: 'CONFIRMADO' },
-    { area: 'Lançamentos', regra: 'Parcelamento de 1 a 120 parcelas; recorrência mensal de 2 a 60 ocorrências, só para contas a pagar; parcelamento e recorrência não se combinam no mesmo lançamento.', fonte: 'Definido pelo executor (limites técnicos; o pedido não fixa números)', status: 'A VALIDAR' },
-    { area: 'Lançamentos', regra: 'Alerta de possível duplicidade: mesmo tipo e mesma pessoa, com mesmo valor e mesmo vencimento, ou mesma nota fiscal. O usuário pode lançar mesmo assim.', fonte: 'Pedido original (alerta de duplicidade); critério de comparação definido pelo executor', status: 'A VALIDAR' },
-    { area: 'Cadastros', regra: 'Alerta de cadastro parecido: mesmo nome (sem diferença de maiúsculas e acentos) ou mesmo CNPJ/CPF; serviço/projeto com mesmo nome para o mesmo cliente.', fonte: 'Pedido original (alerta de duplicidade); critério definido pelo executor', status: 'A VALIDAR' },
+    { area: 'Lançamentos', regra: 'Parcelamento de 1 a 120 parcelas; recorrência mensal de 2 a 60 ocorrências, só para contas a pagar; parcelamento e recorrência não se combinam no mesmo lançamento.', fonte: 'Proposto pelo executor; Aprovado pelo William em 20/10/2026 (mantido em 120 parcelas)', status: 'CONFIRMADO' },
+    { area: 'Lançamentos', regra: 'Alerta de possível duplicidade: mesmo tipo e mesma pessoa, com mesmo valor e mesmo vencimento, ou mesma nota fiscal. Se as duas NFs forem diferentes, não é duplicidade (mesmo cliente, projeto ou pedido com NF diferente são documentos distintos). Quando houver alerta, o usuário analisa e decide se lança mesmo assim.', fonte: 'Regra definida pelo William em 20/10/2026 (NF diferente não é duplicidade)', status: 'CONFIRMADO' },
+    { area: 'Cadastros', regra: 'Alerta de cadastro parecido: mesmo nome (sem diferença de maiúsculas e acentos) ou mesmo CNPJ/CPF; serviço/projeto com mesmo nome para o mesmo cliente.', fonte: 'Pedido original (alerta de duplicidade); Aprovado pelo William em 20/10/2026', status: 'CONFIRMADO' },
     { area: 'Baixas', regra: 'Taxa da baixa, opção 1 (embutida, padrão): a receber = abatido + juros − desconto − taxa; a pagar = abatido + juros − desconto + taxa.', fonte: 'Pedido do William em 19/10/2026 (duas opções selecionáveis)', status: 'CONFIRMADO' },
     { area: 'Baixas', regra: 'Taxa da baixa, opção 2 (separada): recebimento/pagamento pelo valor bruto e a taxa como saída própria em "Tarifas bancárias". O saldo da conta é o mesmo da opção 1. Padrão em Configurações, escolha em cada baixa.', fonte: 'Pedido do William em 19/10/2026 (duas opções selecionáveis)', status: 'CONFIRMADO' },
     { area: 'Baixas', regra: 'Baixa parcial atualiza o saldo sem encerrar o título; o valor abatido não pode passar do saldo em aberto; movimentação realizada não pode ter data futura.', fonte: 'Pedido original; critério de aceite 2', status: 'CONFIRMADO' },
@@ -959,7 +1067,7 @@ const WRDCore = (function () {
     { area: 'Anexos', regra: 'Anexos de até 400 KB cada, guardados no navegador; só conteúdo do tipo data: é aceito.', fonte: 'Definido pelo executor (limite do armazenamento do navegador)', status: 'A VALIDAR' },
     { area: 'Anexos', regra: 'Capacidade total do armazenamento do navegador (cerca de 5 MB, valor não medido).', fonte: 'Não medido nesta entrega', status: 'NÃO INFORMADO' },
     { area: 'Acesso', regra: 'Login e perfis locais (Administrador, Operador, Consulta), sem servidor; a permissão é aplicada no núcleo, não só nos botões; estorno só pelo Administrador. Protege contra uso casual, não contra acesso técnico ao computador.', fonte: AP19, status: 'CONFIRMADO' },
-    { area: 'Acesso', regra: 'Login de 3 a 30 caracteres (letras, números, ponto, hífen, sublinhado); senha de no mínimo 6 caracteres; pelo menos um administrador ativo.', fonte: 'Definido pelo executor', status: 'A VALIDAR' },
+    { area: 'Acesso', regra: 'Login de 3 a 30 caracteres (letras, números, ponto, hífen, sublinhado); senha de no mínimo 6 caracteres; pelo menos um administrador ativo.', fonte: 'Aprovado pelo William em 20/10/2026', status: 'CONFIRMADO' },
     { area: 'Demonstração', regra: 'Demonstração em armazenamento separado (wrd.financeiro.demo), dados marcados "(DEMO)"; backup da demonstração não entra nos dados reais.', fonte: 'Pedido original', status: 'CONFIRMADO' },
     { area: 'Demonstração', regra: 'Na demonstração se entra escolhendo o perfil, sem senha escrita no código; as senhas dos usuários fictícios são aleatórias.', fonte: 'Padrão dos módulos WRD, decisão do William em 20/10/2026', status: 'CONFIRMADO' },
     { area: 'Identidade', regra: 'Cores primária #0F3884 e secundária #929497, extraídas dos logotipos oficiais (amostragem de pixels; o manual não traz códigos).', fonte: 'Logotipos em G:\\Meu Drive\\WRD Engenharia\\Logotipo - WRD Soluções; ' + AP19, status: 'CONFIRMADO' },
@@ -971,7 +1079,11 @@ const WRDCore = (function () {
     { area: 'Nuvem', regra: 'Gravação automática cerca de 1,5 s após cada alteração; os outros aparelhos recebem ao abrir a tela, a cada 60 s ou no botão Atualizar; sem internet, a alteração fica pendente e é enviada quando a conexão volta.', fonte: 'Pedido do William em 20/10/2026 (mesmas informações no PC e no celular, botão de atualização); intervalos definidos pelo executor', status: 'A VALIDAR' },
     { area: 'Nuvem', regra: 'Alteração simultânea em dois aparelhos: registros juntados pelo mais recente (updatedAt), contadores pelo maior valor e o restante pelo último gravado. Como nada é excluído (só arquivado), juntar não perde registro.', fonte: 'Definido pelo executor', status: 'A VALIDAR' },
     { area: 'Nuvem', regra: 'As 20 últimas versões de cada módulo ficam guardadas no banco como cópia de segurança; o backup JSON continua disponível.', fonte: 'Definido pelo executor (quantidade sem referência)', status: 'HIPÓTESE' },
-    { area: 'Nuvem', regra: 'Limites do plano gratuito do Supabase (armazenamento, pausa por inatividade).', fonte: 'Não conferidos na conta; consultar o painel do Supabase', status: 'NÃO INFORMADO' }
+    { area: 'Nuvem', regra: 'Limites do plano gratuito do Supabase (armazenamento, pausa por inatividade).', fonte: 'Não conferidos na conta; consultar o painel do Supabase', status: 'NÃO INFORMADO' },
+    { area: 'Anexos em lote', regra: 'PDFs anexados em lote são guardados em área privada da nuvem (bucket "documentos", pasta deste módulo); só membros do módulo leem ou enviam. O sistema não exclui PDF enviado.', fonte: 'Pedido do William em 20/10/2026 (importar arquivos em lote: PDF, seleção no PC, localização); desenho do executor, sem norma de referência', status: 'CONFIRMADO' },
+    { area: 'Anexos em lote', regra: 'Tamanho máximo de 25 MB por PDF, apenas arquivos .pdf; o link do arquivo é temporário (1 hora).', fonte: 'Definido pelo executor (limite de tamanho do armazenamento do bucket; plano gratuito não conferido)', status: 'HIPÓTESE' },
+    { area: 'Anexos em lote', regra: 'Localização de arquivo (caminho do PC ou da rede) é guardada como texto e não abre no celular; link https abre no navegador.', fonte: 'Pedido do William em 20/10/2026; limitação do navegador', status: 'CONFIRMADO' },
+    { area: 'Anexos em lote', regra: 'O registro sugerido pelo nome do arquivo usa o código ou o número de proposta/nota fiscal que aparece no nome; a escolha final é sempre do usuário.', fonte: 'Definido pelo executor', status: 'A VALIDAR' }
   ];
   const FORMAS_PAGAMENTO = ['PIX','Boleto', 'Transferência', 'Cartão de crédito', 'Cartão de débito', 'Dinheiro', 'Cheque', 'Débito automático', 'Outra'];
 
@@ -1381,23 +1493,62 @@ const WRDCore = (function () {
       if (d.projetoId && !byId('projetos', d.projetoId)) fail('Serviço/projeto não encontrado.');
       if (d.clienteId && !byId('pessoas', d.clienteId)) fail('Cliente vinculado não encontrado.');
       if (d.formaPagamento && !FORMAS_PAGAMENTO.includes(d.formaPagamento)) fail('Forma de pagamento inválida.');
-      (d.anexos || []).forEach(a => { if (!a || !a.nome || !DATA_URL.test(String(a.dataUrl || ''))) fail('Anexo inválido.'); });
+      (d.anexos || []).forEach(a => { if (!a || !a.nome || !(DATA_URL.test(String(a.dataUrl || '')) || anexoReferenciaValido(a))) fail('Anexo inválido.'); });
     }
 
+    /** Anexo por referência: PDF na pasta do módulo na nuvem, ou link https. Não guarda conteúdo. */
+    function anexoReferenciaValido(a) {
+      if (!a || !a.nome) return false;
+      if (a.nuvem) return /^financeiro\/[a-z0-9-]+\.pdf$/.test(String(a.nuvem)) && (a.tamanho > 0 && a.tamanho <= LIMITE_PDF);
+      if (a.url) return /^https?:\/\/\S+$/i.test(String(a.url));
+      return false;
+    }
+    const LIMITE_PDF = 25 * 1024 * 1024;
+    /** Acrescenta anexos (PDF na nuvem ou link) a um lançamento, sem apagar os existentes. Mesma permissão de editar lançamento. */
+    function acrescentarAnexosTitulo(id, lista) {
+      guard('titulo.editar');
+      const t = byId('titulos', id);
+      if (!t) fail('Lançamento não encontrado.');
+      if (!Array.isArray(lista) || !lista.length) fail('Nenhum anexo para incluir.');
+      const u = user();
+      const novos = lista.map(a => {
+        const nome = String((a && a.nome) || '').trim();
+        if (!nome) fail('Anexo sem nome.');
+        const base = { id: uid('anx'), nome, ts: nowISO(), autor: u ? u.nome : '' };
+        if (a.nuvem) {
+          if (!anexoReferenciaValido(a)) fail(`O arquivo "${nome}" não está na pasta deste módulo ou passa de 25 MB.`);
+          return Object.assign(base, { tipo: 'application/pdf', tamanho: a.tamanho, nuvem: String(a.nuvem) });
+        }
+        if (a.url) {
+          if (!anexoReferenciaValido(a)) fail(`O link do anexo "${nome}" deve começar com http:// ou https://.`);
+          return Object.assign(base, { url: String(a.url) });
+        }
+        fail(`O anexo "${nome}" precisa de um arquivo na nuvem ou de um link.`);
+      });
+      return mutate(() => {
+        t.anexos = (t.anexos || []).concat(novos);
+        t.updatedAt = nowISO();
+        log('titulo.anexo', 'titulo', t.id, `${novos.length} anexo(s) incluído(s): ${novos.map(a => a.nome).join('; ')}`);
+        return { id, quantidade: novos.length };
+      });
+    }
     const CAMPOS_TITULO = ['pessoaId', 'descricao', 'categoriaId', 'contaId', 'projetoId', 'clienteId', 'proposta', 'notaFiscal', 'formaPagamento', 'competencia', 'vencimento', 'valor', 'obs', 'anexos'];
     function limparTitulo(d) {
       return {
         tipo: d.tipo, pessoaId: d.pessoaId || null, descricao: String(d.descricao || '').trim(), categoriaId: d.categoriaId || null, contaId: d.contaId || null,
         projetoId: d.projetoId || null, clienteId: d.tipo === 'pagar' ? (d.clienteId || null) : null, proposta: String(d.proposta || '').trim(), notaFiscal: String(d.notaFiscal || '').trim(),
         formaPagamento: d.formaPagamento || '', competencia: d.competencia || d.vencimento, vencimento: d.vencimento, valor: d.valor, obs: String(d.obs || '').trim(),
-        anexos: (d.anexos || []).map(a => ({ id: a.id || uid('anx'), nome: a.nome, tipo: a.tipo || '', tamanho: a.tamanho || 0, dataUrl: a.dataUrl }))
+        anexos: (d.anexos || []).map(a => Object.assign({ id: a.id || uid('anx'), nome: a.nome, tipo: a.tipo || '', tamanho: a.tamanho || 0 }, a.dataUrl ? { dataUrl: a.dataUrl } : {}, a.nuvem ? { nuvem: String(a.nuvem) } : {}, a.url ? { url: String(a.url) } : {}))
       };
     }
 
     function verificarDuplicidade(d, ignorarIds) {
       const ign = new Set(ignorarIds || []);
+      // NF diferente entre dois lançamentos = dois documentos distintos, mesmo com cliente, valor e vencimento iguais: não é duplicidade.
+      // Sem NF (em um dos dois), vale a comparação de valor e vencimento; com NF nos dois, a NF decide.
+      const nfDiferente = t => d.notaFiscal && t.notaFiscal && norm(t.notaFiscal) !== norm(d.notaFiscal);
       const dup = state.titulos.find(t => !t.cancelado && !ign.has(t.id) && t.tipo === d.tipo && t.pessoaId === d.pessoaId &&
-        ((t.valor === d.valor && t.vencimento === d.vencimento) || (d.notaFiscal && norm(t.notaFiscal) === norm(d.notaFiscal))));
+        (d.notaFiscal && t.notaFiscal ? norm(t.notaFiscal) === norm(d.notaFiscal) : (!nfDiferente(t) && t.valor === d.valor && t.vencimento === d.vencimento)));
       if (dup) {
         const p = byId('pessoas', dup.pessoaId);
         fail(`Possível duplicidade: já existe "${dup.descricao}" para ${p ? p.nome : '—'}, ${Money.fmt(dup.valor)}, vencimento ${Dates.fmt(dup.vencimento)}${dup.notaFiscal ? ', NF ' + dup.notaFiscal : ''}. Lançar mesmo assim?`, 'DUPLICIDADE', { id: dup.id });
@@ -1943,7 +2094,7 @@ const WRDCore = (function () {
       s = validarEstrutura(JSON.parse(JSON.stringify(s)));
       for (const t of s.titulos) {
         if (!t || !t.id || !['receber', 'pagar'].includes(t.tipo) || !Number.isInteger(t.valor)) fail('Arquivo inválido: lançamento com dados incompletos.');
-        t.anexos = (t.anexos || []).filter(a => a && DATA_URL.test(String(a.dataUrl || '')));
+        t.anexos = (t.anexos || []).filter(a => a && (DATA_URL.test(String(a.dataUrl || '')) || anexoReferenciaValido(a)));
       }
       for (const b of s.baixas) if (!b || !b.id || !b.tituloId || !Number.isInteger(b.principal) || !Number.isInteger(b.valorEfetivo)) fail('Arquivo inválido: baixa com dados incompletos.');
       if (!!s.demo !== demo) fail(demo ? 'Este arquivo contém dados reais. Importe-o fora do modo demonstração.' : 'Este arquivo é de DEMONSTRAÇÃO e não pode ser importado nos dados reais.');
@@ -1986,7 +2137,7 @@ const WRDCore = (function () {
       criarTransferencia, estornarTransferencia, criarMovSocio, estornarMovSocio,
       lista, get, titulo, listarTitulos, baixasDoTitulo, serieDe, movimentos, saldoConta: (id, ate) => { guard('ler'); return saldoConta(id, ate); }, saldos,
       kpis, projecao, fluxoMensal, porCategoria, resultadoDireto, inadimplencia, resumoMensal, historico,
-      snapshot, importarJSON, apagarTudo
+      snapshot, importarJSON, apagarTudo, acrescentarAnexosTitulo
     };
   }
 
@@ -2402,6 +2553,11 @@ const WRDCore = (function () {
     return (comVazio ? opt('', comVazio, sel) : '') + ps.map(p => opt(p.id, (p.codigo ? p.codigo + ' — ' : '') + p.nome, sel)).join('');
   }
 
+  /** Anexos em lote: cada PDF vai para o lançamento cuja nota fiscal ou proposta aparece no nome do arquivo. */
+  function anexarPdfsLote(tipo) {
+    const alvos = core.listarTitulos({ tipo }).map(t => ({ id: t.id, rotulo: `${t.descricao || 'Lançamento'} · venc. ${D(t.vencimento)} · ${R(t.valor)}`, pistas: [t.notaFiscal, t.proposta].filter(Boolean) }));
+    NV.anexarLote({ alvos, aceitaCaminho: false, depois: () => render(), gravar: (id, lista) => { core.acrescentarAnexosTitulo(id, lista); } });
+  }
   function telaTitulos(tipo) {
     const c = $('#conteudo');
     const f = ui.filtros[tipo];
@@ -2410,6 +2566,7 @@ const WRDCore = (function () {
     c.innerHTML = `
       <div class="cab"><h1 class="titulo-tela u-m0">${rec ? 'Contas a receber' : 'Contas a pagar'}</h1>
         <div class="linha no-print">${core.can('titulo.criar') ? `<button class="btn so-desktop ${rec ? 'btn-receita' : 'btn-despesa'}" data-act="novo-titulo" data-tipo="${tipo}">+ ${rec ? 'Nova receita' : 'Nova despesa'}</button>` : ''}
+        ${typeof NV !== 'undefined' && NV && NV.pdfNaNuvem() && core.can('titulo.editar') ? `<button class="btn" data-act="anexar-lote" data-tipo="${tipo}">Anexar PDFs em lote</button>` : ''}
         <button class="btn" data-act="csv-titulos" data-tipo="${tipo}">Exportar CSV</button><button class="btn" data-act="imprimir-tela">Imprimir</button></div></div>
       <form class="filtros" id="filtros-tit" data-tipo="${tipo}" onsubmit="return false">
         <label class="campo busca">Busca<input type="search" name="busca" value="${esc(f.busca || '')}" placeholder="descrição, ${rec ? 'cliente' : 'fornecedor'}, NF, valor..."></label>
@@ -2591,7 +2748,7 @@ const WRDCore = (function () {
         ${t.proposta ? `<dt>Proposta</dt><dd>${esc(t.proposta)}</dd>` : ''}
         ${t.notaFiscal ? `<dt>Nota fiscal</dt><dd>${esc(t.notaFiscal)}</dd>` : ''}
         ${t.obs ? `<dt>Observações</dt><dd class="u-pre">${esc(t.obs)}</dd>` : ''}
-        ${(t.anexos || []).length ? `<dt>Anexos</dt><dd>${t.anexos.map(a => (/^data:/.test(a.dataUrl || '') ? `<div><a href="${esc(a.dataUrl)}" download="${esc(a.nome)}">📎 ${esc(a.nome)}</a></div>` : `<div>📎 ${esc(a.nome)} <span class="xs muted">(conteúdo não disponível)</span></div>`)).join('')}</dd>` : ''}
+        ${(t.anexos || []).length ? `<dt>Anexos</dt><dd>${t.anexos.map(a => (a.nuvem ? ('<div>📎 ' + (typeof NV !== 'undefined' && NV ? NV.anexoHTML(a) : esc(a.nome)) + '</div>') : a.url ? ('<div><a href="' + esc(a.url) + '" target="_blank" rel="noopener noreferrer">📎 ' + esc(a.nome) + '</a></div>') : /^data:/.test(a.dataUrl || '') ? `<div><a href="${esc(a.dataUrl)}" download="${esc(a.nome)}">📎 ${esc(a.nome)}</a></div>` : `<div>📎 ${esc(a.nome)} <span class="xs muted">(conteúdo não disponível)</span></div>`)).join('')}</dd>` : ''}
         <dt>Registro</dt><dd class="xs muted">criado ${new Date(t.createdAt).toLocaleString('pt-BR')} · alterado ${new Date(t.updatedAt).toLocaleString('pt-BR')} · id ${t.id}</dd>
       </dl>
       <h3 class="u-mt2 u-fs-md">${rec ? 'Recebimentos' : 'Pagamentos'} (baixas)</h3>
@@ -3253,6 +3410,7 @@ const WRDCore = (function () {
     sair: () => { core.logout(); limparEstadoUI(); render(); },
     aba: el => { ui.aba = el.dataset.aba; salvarPrefs(); render(); window.scrollTo(0, 0); },
     'novo-titulo': el => formTitulo(el.dataset.tipo),
+    'anexar-lote': el => anexarPdfsLote(el.dataset.tipo),
     'escolher-baixa': el => escolherParaBaixa(el.dataset.tipo),
     detalhe: el => detalheTitulo(el.dataset.id),
     baixar: (el, e) => { e.stopPropagation(); formBaixa(el.dataset.id); },
