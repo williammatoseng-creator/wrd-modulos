@@ -473,6 +473,21 @@ dl.info dd { margin: 0; }
 .u-link { cursor: pointer !important; color: var(--cor-primaria) !important; }
 .u-sem-borda { border: 0 !important; }
 
+/* Método PRIME — quatro cortes do faturamento (destaque) */
+.prime-bloco { border: 2px solid var(--cor-primaria); background: linear-gradient(180deg, var(--cor-primaria-suave), var(--n-0) 60%); }
+.prime-selo { display: inline-block; background: var(--cor-primaria-escura); color: #fff; font-size: var(--fs-xs); font-weight: var(--peso-forte); letter-spacing: .12em; padding: 3px 9px; border-radius: 999px; margin-right: var(--esp-2); vertical-align: middle; }
+.prime-faturamento { font-size: var(--fs-md); margin: var(--esp-1) 0 var(--esp-3); }
+.prime-grade { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--esp-3); margin-bottom: var(--esp-3); }
+.prime-corte { background: var(--n-0); border: var(--borda) solid var(--n-200); border-radius: var(--raio-lg); padding: var(--esp-3); display: flex; flex-direction: column; gap: var(--esp-1); }
+.prime-rot { font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: var(--ls-lg); color: var(--n-500); }
+.prime-nome { font-weight: var(--peso-forte); color: var(--cor-primaria-escura); }
+.prime-val { font-size: var(--fs-xl); font-weight: var(--peso-forte); }
+.prime-regra { font-size: var(--fs-xs); color: var(--n-500); }
+.prime-uso { display: flex; flex-direction: column; gap: 2px; font-size: var(--fs-xs); border-top: var(--borda) solid var(--n-200); padding-top: var(--esp-1); margin-top: var(--esp-1); }
+.prime-uso.dentro span:last-child { color: var(--ok); }
+.prime-uso.acima span:last-child { color: var(--critico); font-weight: var(--peso-forte); }
+.prime-val { text-align: left; }
+
 </style>
 </head>
 <body>
@@ -868,6 +883,60 @@ const WRDNuvem = (function () {
   return { CONFIG, cliente, sincronizador, mesclar, integrar, MSG };
 })();
 if (typeof module !== 'undefined') module.exports = WRDNuvem;
+
+</script>
+<script>
+/* Método PRIME: os quatro cortes de todo faturamento.
+   Cálculo único, usado pelo painel e pelo Financeiro, para que os dois mostrem sempre os mesmos números.
+   Valores em centavos (inteiros). Faturamento = principal recebido no mês (títulos a receber, baixas não estornadas).
+   Uso: QuadroPrime.calcular({ titulos, baixas, movimentosSocios }, 'AAAA-MM') */
+(function (g) {
+  'use strict';
+  const CORTES = [
+    { id: 'lucro', rotulo: 'Lucro da empresa', pct: 10, tipo: 'reserva', regra: 'Separado e intocável. É o lucro da empresa.' },
+    { id: 'prolabore', rotulo: 'Pró-labore', pct: 50, tipo: 'teto', regra: 'Teto para a retirada do seu trabalho no próprio negócio.' },
+    { id: 'impostos', rotulo: 'Impostos', pct: 18, tipo: 'reserva', regra: 'Reserva para impostos. Esse dinheiro nunca foi seu.' },
+    { id: 'operacao', rotulo: 'Operação', pct: 22, tipo: 'teto', regra: 'Máximo para rodar a operação: fornecedores, ferramentas e estrutura.' }
+  ];
+
+  function calcular(dados, mes) {
+    const titulos = new Map((dados.titulos || []).map(t => [t.id, t]));
+    let faturamento = 0, operacaoGasta = 0, prolaboreRetirado = 0;
+    // Mesma regra de movimentos() do Financeiro: pagamento de título a pagar e tarifa separada entram como despesa.
+    for (const b of dados.baixas || []) {
+      if (b.estornada || !b.data || b.data.slice(0, 7) !== mes) continue;
+      const t = titulos.get(b.tituloId);
+      if (!t) continue;
+      if (t.tipo === 'receber') faturamento += Number(b.principal || 0);
+      else operacaoGasta += Number(b.valorEfetivo || 0);
+      if (b.taxaSeparada) operacaoGasta += Number(b.taxaSeparada);
+    }
+    for (const m of dados.movimentosSocios || []) {
+      if (!m.estornado && m.tipo === 'retirada' && m.data && m.data.slice(0, 7) === mes) prolaboreRetirado += Number(m.valor || 0);
+    }
+    const cortes = CORTES.map(c => {
+      const valor = Math.round(faturamento * c.pct / 100);
+      const realizado = c.id === 'operacao' ? operacaoGasta : c.id === 'prolabore' ? prolaboreRetirado : null;
+      return Object.assign({}, c, {
+        valor,
+        realizado,
+        saldo: realizado === null ? null : valor - realizado,
+        situacao: realizado === null ? null : (realizado > valor ? 'acima' : 'dentro')
+      });
+    });
+    return {
+      mes,
+      faturamento,
+      cortes,
+      // Comparação com a conta tradicional: faturamento − despesas pagas. Ali o lucro é o que sobra por último.
+      tradicional: { despesasPagas: operacaoGasta, lucroSobra: faturamento - operacaoGasta },
+      prime: { lucroSeparado: cortes[0].valor }
+    };
+  }
+
+  g.QuadroPrime = { CORTES, calcular };
+  if (typeof module !== 'undefined' && module.exports) module.exports = g.QuadroPrime;
+})(typeof window !== 'undefined' ? window : globalThis);
 
 </script>
 <script>
@@ -2088,6 +2157,8 @@ const WRDCore = (function () {
       if (!['contas', 'pessoas', 'projetos', 'categorias', 'recorrencias'].includes(coll)) fail('Coleção não disponível.');
       return state[coll].map(x => Object.assign({}, x));
     }
+    /** Dados brutos usados pelo Método PRIME (_comum/quadro-prime.js). Mesmo cálculo usado no painel. */
+    function dadosPrime() { guard('ler'); return { titulos: state.titulos, baixas: state.baixas, movimentosSocios: state.movimentosSocios }; }
     function get(coll, id) { guard('ler'); const x = byId(coll, id); return x && coll !== 'users' ? Object.assign({}, x) : null; }
     function config() { guard('ler'); return Object.assign({}, state.config); }
 
@@ -2146,7 +2217,7 @@ const WRDCore = (function () {
 
     return {
       SCHEMA_VERSION, demo,
-      on, emit, hoje,
+      on, emit, hoje, dadosPrime,
       hasUsers, setupAdmin, login, logout, usuariosDemo, entrarDemo, entrarPelaNuvem, user, can, listarUsuarios, salvarUsuario, alterarSenha,
       salvarConfig, config, emitirNumeroRelatorio,
       salvarPessoa, salvarProjeto, salvarCategoria, salvarConta,
@@ -2520,6 +2591,7 @@ const WRDCore = (function () {
         ${kpi('neutro', 'Aportes dos sócios', k.aportes, per, 'ir-mov', 'data-tipo="aporte"')}
         ${kpi('neutro', 'Retiradas dos sócios', k.retiradas, per, 'ir-mov', 'data-tipo="retirada"')}
       </div></div>
+      ${htmlPrime()}
       <div class="grade g2">
         <section class="cartao"><div class="cab"><h2>Entradas e saídas</h2><span class="xs muted">${per}</span></div>${graficoES(de, ate)}</section>
         <section class="cartao"><div class="cab"><h2>Saldo por conta</h2><span class="xs muted">realizado, hoje</span></div>
@@ -2531,6 +2603,21 @@ const WRDCore = (function () {
       <section class="cartao"><div class="cab"><h2>Próximos vencimentos</h2><span class="xs muted">a partir de hoje · em aberto</span></div>
         ${tabelaTitulos(prox, { mostrarTipo: true, semTotais: true, vazio: 'Nenhum vencimento em aberto a partir de hoje.' })}
       </section>`;
+  }
+
+  /* Método PRIME: mesmo cálculo do painel (_comum/quadro-prime.js), sempre sobre o mês corrente. */
+  function htmlPrime() {
+    const mes = core.hoje().slice(0, 7);
+    const q = QuadroPrime.calcular(core.dadosPrime(), mes);
+    const cartoes = q.cortes.map(c => {
+      const uso = c.realizado === null ? '' : `<div class="prime-uso ${c.situacao}"><span>${c.id === 'operacao' ? 'Gasto na operação' : 'Retirado como pró-labore'}: <b>${R(c.realizado)}</b></span><span>${c.saldo >= 0 ? 'restam ' + R(c.saldo) : 'passou ' + R(-c.saldo)}</span></div>`;
+      return `<div class="prime-corte prime-${c.id}"><div class="prime-rot">${c.pct}% · ${c.tipo === 'teto' ? 'teto' : 'reserva'}</div><div class="prime-nome">${esc(c.rotulo)}</div><div class="prime-val num">${R(c.valor)}</div><div class="prime-regra">${esc(c.regra)}</div>${uso}</div>`;
+    }).join('');
+    return `<section class="cartao prime-bloco"><div class="cab"><h2><span class="prime-selo">PRIME</span> Quatro cortes do faturamento</h2><span class="xs muted">${Dates.nomeMes(mes)}</span></div>
+      <p class="prime-faturamento">Faturamento do mês: <b>${R(q.faturamento)}</b> <span class="xs muted">principal recebido no mês</span></p>
+      <div class="prime-grade">${cartoes}</div>
+      <p class="xs muted">Conta tradicional (faturamento − despesas pagas): <b>${R(q.tradicional.lucroSobra)}</b>, ou seja, o lucro só aparece se sobrar. No método PRIME, <b>${R(q.prime.lucroSeparado)}</b> de lucro sai antes de qualquer gasto.</p>
+    </section>`;
   }
 
   function graficoES(de, ate) {

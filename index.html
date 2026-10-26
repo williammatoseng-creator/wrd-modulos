@@ -65,6 +65,25 @@
 
   /* Funil e barras */
   .funil { display: grid; gap: 8px; }
+  /* Método PRIME: quatro cortes do faturamento (destaque) */
+  .prime-bloco { border: 2px solid var(--azul); background: linear-gradient(180deg, var(--azul-suave), var(--branco) 60%); margin-bottom: 14px; }
+  .prime-cab { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .prime-cab h3 { margin: 0; font-size: 16px; color: var(--azul-escuro); }
+  .prime-selo { background: var(--azul-escuro); color: #fff; font-size: 11px; font-weight: 700; letter-spacing: .12em; padding: 3px 9px; border-radius: 999px; }
+  .prime-faturamento { margin: 6px 0 12px; font-size: 14px; color: var(--texto); }
+  .prime-sub { font-size: 12px; color: var(--texto-2); }
+  .prime-grade { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+  .prime-corte { background: var(--branco); border: 1px solid var(--linha); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 4px; }
+  .prime-rot { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--texto-2); }
+  .prime-nome { font-weight: 700; color: var(--azul-escuro); }
+  .prime-val { font-size: 20px; font-weight: 700; }
+  .prime-regra { font-size: 12px; color: var(--texto-2); }
+  .prime-barra { height: 6px; background: var(--linha); border-radius: 999px; overflow: hidden; margin-top: 6px; }
+  .prime-barra-preench { height: 100%; background: var(--ok); }
+  .prime-barra-preench.acima { background: var(--critico); }
+  .prime-uso { font-size: 12px; margin-top: 4px; }
+  .prime-uso.acima { color: var(--critico); font-weight: 700; }
+  .prime-nota { margin: 12px 0 0; font-size: 13px; color: var(--texto-2); }
   .barra-linha { display: grid; grid-template-columns: 130px 1fr 110px; gap: 10px; align-items: center; font-size: 13px; }
   .barra-trilha { background: var(--azul-suave); border-radius: 6px; height: 14px; overflow: hidden; }
   .barra-preench { height: 100%; background: linear-gradient(90deg, var(--azul), var(--azul-medio)); border-radius: 6px; }
@@ -168,6 +187,11 @@
     <div class="aviso-dados" id="aviso-dados" hidden></div>
 
     <section class="grade-kpi" id="kpis"></section>
+    <section class="cartao prime-bloco" id="prime" aria-label="Método PRIME">
+      <div class="prime-cab"><span class="prime-selo">PRIME</span><h3>Quatro cortes do faturamento <small id="prime-mes"></small></h3></div>
+      <p class="prime-faturamento">Faturamento do mês: <b id="prime-fat">—</b> <span class="prime-sub">principal recebido no mês, mesmo número do Financeiro</span></p>
+      <div id="prime-conteudo"></div>
+    </section>
 
     <section class="duas">
       <div class="cartao">
@@ -214,6 +238,61 @@
     </section>
   </main>
 </div>
+
+<script>
+/* Método PRIME: os quatro cortes de todo faturamento.
+   Cálculo único, usado pelo painel e pelo Financeiro, para que os dois mostrem sempre os mesmos números.
+   Valores em centavos (inteiros). Faturamento = principal recebido no mês (títulos a receber, baixas não estornadas).
+   Uso: QuadroPrime.calcular({ titulos, baixas, movimentosSocios }, 'AAAA-MM') */
+(function (g) {
+  'use strict';
+  const CORTES = [
+    { id: 'lucro', rotulo: 'Lucro da empresa', pct: 10, tipo: 'reserva', regra: 'Separado e intocável. É o lucro da empresa.' },
+    { id: 'prolabore', rotulo: 'Pró-labore', pct: 50, tipo: 'teto', regra: 'Teto para a retirada do seu trabalho no próprio negócio.' },
+    { id: 'impostos', rotulo: 'Impostos', pct: 18, tipo: 'reserva', regra: 'Reserva para impostos. Esse dinheiro nunca foi seu.' },
+    { id: 'operacao', rotulo: 'Operação', pct: 22, tipo: 'teto', regra: 'Máximo para rodar a operação: fornecedores, ferramentas e estrutura.' }
+  ];
+
+  function calcular(dados, mes) {
+    const titulos = new Map((dados.titulos || []).map(t => [t.id, t]));
+    let faturamento = 0, operacaoGasta = 0, prolaboreRetirado = 0;
+    // Mesma regra de movimentos() do Financeiro: pagamento de título a pagar e tarifa separada entram como despesa.
+    for (const b of dados.baixas || []) {
+      if (b.estornada || !b.data || b.data.slice(0, 7) !== mes) continue;
+      const t = titulos.get(b.tituloId);
+      if (!t) continue;
+      if (t.tipo === 'receber') faturamento += Number(b.principal || 0);
+      else operacaoGasta += Number(b.valorEfetivo || 0);
+      if (b.taxaSeparada) operacaoGasta += Number(b.taxaSeparada);
+    }
+    for (const m of dados.movimentosSocios || []) {
+      if (!m.estornado && m.tipo === 'retirada' && m.data && m.data.slice(0, 7) === mes) prolaboreRetirado += Number(m.valor || 0);
+    }
+    const cortes = CORTES.map(c => {
+      const valor = Math.round(faturamento * c.pct / 100);
+      const realizado = c.id === 'operacao' ? operacaoGasta : c.id === 'prolabore' ? prolaboreRetirado : null;
+      return Object.assign({}, c, {
+        valor,
+        realizado,
+        saldo: realizado === null ? null : valor - realizado,
+        situacao: realizado === null ? null : (realizado > valor ? 'acima' : 'dentro')
+      });
+    });
+    return {
+      mes,
+      faturamento,
+      cortes,
+      // Comparação com a conta tradicional: faturamento − despesas pagas. Ali o lucro é o que sobra por último.
+      tradicional: { despesasPagas: operacaoGasta, lucroSobra: faturamento - operacaoGasta },
+      prime: { lucroSeparado: cortes[0].valor }
+    };
+  }
+
+  g.QuadroPrime = { CORTES, calcular };
+  if (typeof module !== 'undefined' && module.exports) module.exports = g.QuadroPrime;
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
 
 <script>
 (function () {
@@ -321,6 +400,7 @@
     r.pendAtrasadas = abertas.filter(p => p.prazo && p.prazo < hoje).length;
     r.servicos = ops && Array.isArray(ops.servicos) ? ops.servicos.length : 0;
     r.inspecoes = ppci && Array.isArray(ppci.inspecoes) ? ppci.inspecoes.length : 0;
+    if (fin) r.prime = QuadroPrime.calcular(fin, mes);
     return r;
   }
 
@@ -411,6 +491,25 @@
     ].join('');
   }
 
+  /* ---------- Método PRIME (mesmo cálculo do Financeiro: _comum/quadro-prime.js) ---------- */
+  function desenharPrime(i) {
+    if (!i.prime) {
+      $('prime-mes').textContent = '';
+      $('prime-fat').textContent = '—';
+      $('prime-conteudo').innerHTML = '<div class="vazio">O Financeiro ainda não tem dados gravados na nuvem.</div>';
+      return;
+    }
+    const q = i.prime;
+    $('prime-mes').textContent = new Date(q.mes + '-01T12:00:00').toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+    $('prime-fat').textContent = brl(q.faturamento);
+    const cartoes = q.cortes.map(c => {
+      const pctUso = c.realizado === null || c.valor <= 0 ? 0 : Math.min(100, Math.round(c.realizado / c.valor * 100));
+      const uso = c.realizado === null ? '' : `<div class="prime-barra"><div class="prime-barra-preench ${c.situacao}" style="width:${pctUso}%"></div></div><div class="prime-uso ${c.situacao}">${c.id === 'operacao' ? 'Gasto na operação' : 'Retirado como pró-labore'}: <b>${brl(c.realizado)}</b> · ${c.saldo >= 0 ? 'restam ' + brl(c.saldo) : 'passou ' + brl(-c.saldo)}</div>`;
+      return `<div class="prime-corte prime-${c.id}"><div class="prime-rot">${c.pct}% · ${c.tipo === 'teto' ? 'teto' : 'reserva'}</div><div class="prime-nome">${esc(c.rotulo)}</div><div class="prime-val num">${brl(c.valor)}</div><div class="prime-regra">${esc(c.regra)}</div>${uso}</div>`;
+    }).join('');
+    $('prime-conteudo').innerHTML = `<div class="prime-grade">${cartoes}</div><p class="prime-nota">Conta tradicional (faturamento − despesas pagas): <b>${brl(q.tradicional.lucroSobra)}</b>, o lucro só aparece se sobrar. No método PRIME, <b>${brl(q.prime.lucroSeparado)}</b> de lucro sai antes de qualquer gasto.</p>`;
+  }
+
   function desenharTudo(d, i) {
     $('data-hoje').textContent = new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
     $('usuario').textContent = emailUsuario();
@@ -418,6 +517,7 @@
     $('aviso-dados').hidden = !semDados;
     $('aviso-dados').textContent = 'Os módulos ainda não têm dados gravados na nuvem. Os indicadores aparecem assim que os módulos forem usados com a nuvem conectada.';
     desenharKpis(i);
+    desenharPrime(i);
     desenharComercial(i);
     desenharRecebiveis(i);
     desenharAlertas(i, d.fila, d.execucoes);
