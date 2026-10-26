@@ -623,9 +623,9 @@ const WRDNuvem = (function () {
 
   /* ---------- cliente REST (Auth + PostgREST), sem biblioteca externa ---------- */
   function cliente(o) {
-    const modulo = o.modulo, guarda = o.guarda, f = o.fetchFn || ((...a) => fetch(...a)), agora = o.agora || (() => Date.now());
-    let sessao = null; try { sessao = JSON.parse(guarda.get('nuvem.sessao') || 'null'); } catch (e) { sessao = null; }
-    const gravarSessao = s => { sessao = s; if (s) guarda.set('nuvem.sessao', JSON.stringify(s)); else guarda.remove('nuvem.sessao'); };
+    const modulo = o.modulo, guarda = o.guarda, guardaSessao = o.guardaSessao || o.guarda, f = o.fetchFn || ((...a) => fetch(...a)), agora = o.agora || (() => Date.now());
+    let sessao = null; try { sessao = JSON.parse(guardaSessao.get('nuvem.sessao') || 'null'); } catch (e) { sessao = null; }
+    const gravarSessao = s => { sessao = s; if (s) guardaSessao.set('nuvem.sessao', JSON.stringify(s)); else guardaSessao.remove('nuvem.sessao'); };
     const deResposta = j => ({ access_token: j.access_token, refresh_token: j.refresh_token, expires_at: j.expires_at ? j.expires_at * 1000 : agora() + (j.expires_in || 3600) * 1000, user: { id: j.user && j.user.id, email: j.user && j.user.email } });
     async function http(caminho, opc, autenticar) {
       const h = { apikey: CONFIG.chave, 'Content-Type': 'application/json' };
@@ -675,6 +675,11 @@ const WRDNuvem = (function () {
       },
       /** Link temporário (1 hora) para abrir um PDF do bucket privado. */
       async linkPdf(caminho) { const j = await http('/storage/v1/object/sign/documentos/' + caminho, { method: 'POST', body: JSON.stringify({ expiresIn: 3600 }) }, true); return CONFIG.url + '/storage/v1' + j.signedURL; },
+      /** Publica um evento na tabela eventos (somente de inserção). Quem grava é o próprio usuário logado. */
+      async publicarEvento(tipo, entidadeId, payload) {
+        const uid = sessao && sessao.user ? sessao.user.id : null;
+        return http('/rest/v1/eventos', { method: 'POST', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ tipo, modulo, entidade_id: entidadeId ? String(entidadeId) : null, payload: payload || {}, criado_por: uid }) }, true);
+      },
       async adicionarMembro(email, papel) { return http('/rest/v1/rpc/adicionar_membro', { method: 'POST', body: JSON.stringify({ p_email: email, p_modulo: modulo, p_papel: papel || 'membro' }) }, true); }
     };
   }
@@ -729,6 +734,8 @@ const WRDNuvem = (function () {
       local.set('state', JSON.stringify(mesclar(loc, r.dados))); meta = { versao: r.versao, pendente: true }; gravarMeta(meta);
       recarregar({ mesclado: true }); return enviar();
     }
+    // Dentro do painel integrado, avisa que a nuvem mudou para o painel atualizar os indicadores.
+    function avisarPainel() { try { if (window.parent && window.parent !== window) window.parent.postMessage({ wrd: 'nuvem', modulo: cli.modulo }, '*'); } catch (e) { /* sem painel */ } }
     async function enviar() {
       if (enviando) return enviando;
       const g = geracao, dados = estadoLocal();
@@ -739,6 +746,7 @@ const WRDNuvem = (function () {
           const v = await cli.salvar(dados, meta.versao, aparelho);
           meta = { versao: v, pendente: g !== geracao }; gravarMeta(meta); ultimo = new Date(); enviando = null;
           if (meta.pendente) return enviar();
+          avisarPainel();
           return status('ok');
         } catch (e) {
           enviando = null;
@@ -839,7 +847,7 @@ const WRDNuvem = (function () {
     /** Modo real: entra pela nuvem (devolve true se a nuvem assumiu a tela) ou segue local. */
     function abrir() {
       if (!disponivel()) { parar(); return false; }
-      cli = cli || cliente({ modulo: o.modulo, guarda: loc(o.ns + '.nuvem:') });
+      cli = cli || cliente({ modulo: o.modulo, guarda: loc(o.ns + '.nuvem:'), guardaSessao: loc('wrd.nuvem:') });
       if (!cli.conectado()) { tela = 'entrar'; o.render(); return true; }
       conectar(); return true;
     }
@@ -965,7 +973,7 @@ const WRDNuvem = (function () {
       catch (er) { if (janela) janela.close(); o.toast(er.message, 'erro'); }
     });
 
-    return { disponivel, abrir, parar, telaHTML, botaoTopo, abaConfig, posRender, ativo: () => !!sync, situacao: () => (sync ? sync.situacao() : null), anexoHTML, pdfNaNuvem, anexarLote };
+    return { disponivel, abrir, parar, telaHTML, botaoTopo, abaConfig, posRender, usuarioEmail: () => (cli && cli.usuario() ? cli.usuario().email : null), publicarEvento: (tipo, id, payload) => (cli && cli.conectado() ? cli.publicarEvento(tipo, id, payload) : Promise.resolve(null)), ativo: () => !!sync, situacao: () => (sync ? sync.situacao() : null), anexoHTML, pdfNaNuvem, anexarLote };
   }
 
   return { CONFIG, cliente, sincronizador, mesclar, integrar, MSG };
@@ -1458,6 +1466,15 @@ const WRDOps = (function () {
     function entrarDemo(lg) {
       if (!demo) fail('Entrada sem senha só existe na demonstração.', 'PERMISSAO');
       const u = state.users.find(x => x.login === lg && x.ativo); if (!u) fail('Usuário de demonstração não encontrado.', 'AUTH');
+      session = { userId: u.id, inicio: nowISO() }; if (sessStore) sessStore.set('session', JSON.stringify(session)); return user();
+    }
+    /** Entrada pela conta da nuvem: quem entrou no painel com o e-mail de um perfil deste módulo entra direto, sem nova senha. Só no modo real. Se o módulo tiver um único perfil ativo, ele é usado. */
+    function entrarPelaNuvem(email) {
+      if (demo) fail('Entrada pela nuvem só existe no modo real.', 'PERMISSAO');
+      const e = String(email || '').trim().toLowerCase();
+      const ativos = state.users.filter(x => x.ativo);
+      const u = (e && ativos.find(x => String(x.email || '').trim().toLowerCase() === e)) || (ativos.length === 1 ? ativos[0] : null);
+      if (!u) fail('Nenhum perfil deste módulo tem o e-mail da sua conta. Informe o e-mail no perfil em Configurações › Usuários.', 'AUTH');
       session = { userId: u.id, inicio: nowISO() }; if (sessStore) sessStore.set('session', JSON.stringify(session)); return user();
     }
     function listarUsuarios() { guard('usuario.salvar'); return state.users.map(u => ({ id: u.id, nome: u.nome, login: u.login, perfil: u.perfil, cargo: u.cargo || '', email: u.email || '', ativo: u.ativo, updatedAt: u.updatedAt })); }
@@ -2699,7 +2716,7 @@ const WRDOps = (function () {
     return {
       MODULO_ID, SCHEMA_VERSION, demo, ETAPAS, CONDICOES, PRIORIDADES, SIT_ATIV, SIT_PEND, PEND_ABERTAS, RESPONSABILIDADE, SIT_ACAO, VISIBILIDADE, PERFIS, CAMPOS_PEND, CAMPOS_PADRAO, CAMPOS_DATA,
       Dates, Money, hoje, dataLocal, on,
-      hasUsers, setupAdmin, login, logout, usuariosDemo, entrarDemo, user, can, listarUsuarios, salvarUsuario, alterarSenha, equipe,
+      hasUsers, setupAdmin, login, logout, usuariosDemo, entrarDemo, entrarPelaNuvem, user, can, listarUsuarios, salvarUsuario, alterarSenha, equipe,
       config, salvarConfig, tipos, salvarTipo,
       salvarCliente, salvarUnidade, arquivar, clientes, unidades,
       salvarServico, moverEtapa, definirCondicao, registrarAceite, listarServicos, servicoDetalhe,
@@ -2813,7 +2830,7 @@ if (typeof module !== 'undefined') module.exports = WRDDemo;
     modulo: 'operacoes', titulo: 'WRD Operações', nomeModulo: 'Operações', ns: 'wrd.operacoes', logo: LOGO_AZUL,
     storageReal: () => adaptador(localStorage, 'wrd.operacoes:'),
     toast: (m, t) => toast(m, t), confirmar: (t, m, b) => confirmar(t, m, b), abrirModal: (t, h) => modal(t, h), fmtTs: ts => D.fmtTs(ts),
-    aoPronto: storage => { try { criarCore('real', storage); } catch (e) { core = null; toast(e.message, 'erro'); render(); return; } if (core.user()) lerNav(); render(); NEXO.emit('operacoes.modulo.pronto', { demo: false }); },
+    aoPronto: storage => { try { criarCore('real', storage); } catch (e) { core = null; toast(e.message, 'erro'); render(); return; } entrarNaNuvem(); if (core.user()) lerNav(); render(); NEXO.emit('operacoes.modulo.pronto', { demo: false }); },
     aoRecarregar: info => {
       if (!core || modo !== 'real') return;
       try { criarCore('real', storageAtual); } catch (e) { toast(e.message, 'erro'); return; }
@@ -2824,6 +2841,16 @@ if (typeof module !== 'undefined') module.exports = WRDDemo;
     aoVoltar: () => { core = null; try { sessionStorage.removeItem('wrd.operacoes.modo'); } catch (er) { /* opcional */ } render(); },
     render: () => { core = null; render(); }
   }) : null;
+  /* Dentro do painel integrado, "Sair" devolve o controle ao painel; a conexão com a nuvem continua valendo. */
+  function voltarAoPainel(modulo) {
+    try { if (window.parent && window.parent !== window) { window.parent.postMessage({ wrd: 'voltar', modulo }, '*'); return true; } } catch (e) { /* fora do painel */ }
+    return false;
+  }
+  // Com a conta da nuvem já conectada, o módulo entra no perfil correspondente sem pedir a senha de novo. Se não houver perfil, cai na tela de login.
+  function entrarNaNuvem() {
+    if (!core || core.user() || !NV || !NV.usuarioEmail) return;
+    try { core.entrarPelaNuvem(NV.usuarioEmail()); } catch (e) { /* sem perfil correspondente: segue para a tela de login */ }
+  }
   function abrirModo(m) {
     modo = m;
     try { sessionStorage.setItem('wrd.operacoes.modo', m); } catch (e) { /* aba privada */ }
@@ -3995,7 +4022,7 @@ if (typeof module !== 'undefined') module.exports = WRDDemo;
       case 'modo': abrirModo(a.dataset.modo); break;
       case 'entrar-demo': try { core.entrarDemo(a.dataset.login); lerNav(); render(); } catch (er) { toast(er.message, 'erro'); } break;
       case 'trocar-modo': if (NV) NV.parar(); core = null; try { sessionStorage.removeItem('wrd.operacoes.modo'); } catch (er) { /* opcional */ } render(); break;
-      case 'sair': core.logout(); $$('.modal-fundo').forEach(x => x.remove()); render(); break;
+      case 'sair': if (!voltarAoPainel('operacoes')) { core.logout(); $$('.modal-fundo').forEach(x => x.remove()); render(); } break;
       case 'vista': UI.vista = a.dataset.v; salvarNav(); refresh(); break;
       case 'escala': UI.FX.cronograma.escala = a.dataset.v; refresh(); break;
       case 'per-mes': UI.periodo = null; refresh(); break;
