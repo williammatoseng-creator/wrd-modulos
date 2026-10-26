@@ -2849,7 +2849,14 @@ if (typeof module !== 'undefined') module.exports = WRDDemo;
   // Com a conta da nuvem já conectada, o módulo entra no perfil correspondente sem pedir a senha de novo. Se não houver perfil, cai na tela de login.
   function entrarNaNuvem() {
     if (!core || core.user() || !NV || !NV.usuarioEmail) return;
-    try { core.entrarPelaNuvem(NV.usuarioEmail()); } catch (e) { /* sem perfil correspondente: segue para a tela de login */ }
+    const email = NV.usuarioEmail() || '';
+    try { core.entrarPelaNuvem(email); return; } catch (e) { /* sem perfil correspondente */ }
+    if (core.hasUsers() || !email) return;
+    // Módulo vazio: cria o administrador com o e-mail da conta da nuvem. A senha é aleatória; o acesso passa a ser pelo painel.
+    const base = email.split('@')[0].split('').map(c => (/[A-Za-z0-9.]/.test(c) ? c : '.')).join('').slice(0, 30);
+    const login = base.length >= 3 ? base : 'admin';
+    const senha = Array.from(crypto.getRandomValues(new Uint8Array(24))).map(b => b.toString(36)).join('');
+    try { core.setupAdmin({ nome: login, login, senha, email }); } catch (e) { /* segue para o formulário de primeiro acesso */ }
   }
   function abrirModo(m) {
     modo = m;
