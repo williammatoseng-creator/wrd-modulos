@@ -1575,8 +1575,9 @@ const WRDCore = (function () {
       if (!c || c.tipo !== tipoCat) fail(`Informe uma categoria de ${tipoCat}.`);
       if (!c.ativa && (!ex || ex.categoriaId !== d.categoriaId)) fail('A categoria selecionada está inativa.');
       const ct = byId('contas', d.contaId);
-      if (!ct) fail(d.tipo === 'receber' ? 'Informe a conta de recebimento.' : 'Informe a conta de pagamento.');
-      if (!ct.ativa && (!ex || ex.contaId !== d.contaId)) fail('A conta selecionada está inativa.');
+      // Receita a faturar pode ficar sem conta até o cadastro bancário ser informado (editável depois).
+      if (!ct && !(d.aFaturar && !d.contaId)) fail(d.tipo === 'receber' ? 'Informe a conta de recebimento.' : 'Informe a conta de pagamento.');
+      if (ct && !ct.ativa && (!ex || ex.contaId !== d.contaId)) fail('A conta selecionada está inativa.');
       if (d.projetoId && !byId('projetos', d.projetoId)) fail('Serviço/projeto não encontrado.');
       if (d.clienteId && !byId('pessoas', d.clienteId)) fail('Cliente vinculado não encontrado.');
       if (d.formaPagamento && !FORMAS_PAGAMENTO.includes(d.formaPagamento)) fail('Forma de pagamento inválida.');
