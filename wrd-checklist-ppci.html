@@ -3037,7 +3037,8 @@ function criarRelatorios(core, evid) {
   const token = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
   const prefKey = () => `wrd.${NS_BASE}.${modo}.ui`;
   function salvarPrefs() { try { localStorage.setItem(prefKey(), JSON.stringify({ tela: UI.tela, inspId: UI.inspId, areaId: UI.areaId, filtro: UI.filtro })); } catch (e) { /* sem localStorage */ } }
-  function lerPrefs() { try { Object.assign(UI, JSON.parse(localStorage.getItem(prefKey()) || '{}')); } catch (e) { /* ignora */ } }
+  /* Ao abrir, nunca volta direto para Clientes ou Configurações: a tela de trabalho é Inspeções/Vistoria. */
+  function lerPrefs() { try { Object.assign(UI, JSON.parse(localStorage.getItem(prefKey()) || '{}')); } catch (e) { /* ignora */ } if (['cadastros', 'config'].includes(UI.tela)) UI.tela = 'inicio'; }
 
   function toast(msg, tipo) { const t = document.createElement('div'); t.className = 'toast ' + (tipo || ''); t.setAttribute('role', tipo === 'erro' ? 'alert' : 'status'); t.textContent = msg; $('#toasts').appendChild(t); setTimeout(() => t.remove(), tipo === 'erro' ? 7000 : 3200); }
   function tentar(fn) { try { const r = fn(); if (r && r.catch) r.catch(e => { console.error(e); toast(e.message, 'erro'); }); return r; } catch (e) { console.error(e); toast(e.message, 'erro'); return undefined; } }
@@ -3084,7 +3085,7 @@ function criarRelatorios(core, evid) {
   function aposLogin() {
     lerPrefs();
     if (UI.inspId && !core.inspecao(UI.inspId)) { UI.inspId = null; UI.areaId = null; }
-    if (!UI.inspId) { const ult = core.listarInspecoes({ situacao: 'em_andamento' }).filter(i => i.posicao).sort((a, b) => (b.posicao.em || '').localeCompare(a.posicao.em || ''))[0]; if (ult) { UI.inspId = ult.id; UI.areaId = ult.posicao.areaId; UI.tela = 'vistoria'; } }
+    if (!UI.inspId) { const ult = core.listarInspecoes({ situacao: 'em_andamento' }).filter(i => i.posicao).sort((a, b) => (b.posicao.em || '').localeCompare(a.posicao.em || ''))[0]; if (ult) { UI.inspId = ult.id; UI.areaId = ult.posicao.areaId; UI.tela = 'vistoria'; } else UI.tela = 'inicio'; }
     render();
   }
   /* Integração com a nuvem WRD (login, sincronização, conflito). O estado do módulo é o mesmo que o nuvem.js já sincroniza. */
@@ -3237,7 +3238,7 @@ function criarRelatorios(core, evid) {
   }
   function modalNovaInspecao() {
     const emps = core.listarEmpresas(); if (!emps.length) { toast('Cadastre primeiro um cliente e uma unidade em "Clientes e usuários".', 'erro'); UI.tela = 'cadastros'; renderTela(); return; }
-    const mods = core.listarModelos().filter(m => m.status === 'publicado');
+    const mods = modelosVigentes(core.listarModelos()).filter(m => m.status === 'publicado');
     const agora = new Date().toTimeString().slice(0, 5);
     const m = modal('Nova inspeção', `<form id="f-ni" class="grade g2">
       ${campo('Cliente (empresa)', `<select name="empresaId" required>${opt('', 'Escolha…')}${emps.map(e => opt(e.id, e.nome)).join('')}</select>`, { req: true })}
@@ -3857,8 +3858,13 @@ function criarRelatorios(core, evid) {
   /* =================================================================== */
   /* MODELOS DE CHECKLIST                                                 */
   /* =================================================================== */
+  /* Só a versão mais nova de cada família aparece. As anteriores continuam guardadas, porque inspeções já feitas as usam. */
+  function modelosVigentes(lista) {
+    const num = v => String(v || '0').split('.').map(Number), maior = (a, b) => { const x = num(a), y = num(b); for (let k = 0; k < Math.max(x.length, y.length); k++) { const d = (x[k] || 0) - (y[k] || 0); if (d) return d; } return 0; };
+    return lista.filter(m => !lista.some(o => o.familia === m.familia && maior(o.versao, m.versao) > 0));
+  }
   function telaModelos(el) {
-    const mods = core.listarModelos(); if (!UI.modeloSel || !core.modelo(UI.modeloSel)) UI.modeloSel = mods[0] && mods[0].id;
+    const mods = modelosVigentes(core.listarModelos()); if (!UI.modeloSel || !core.modelo(UI.modeloSel)) UI.modeloSel = mods[0] && mods[0].id;
     const m = core.modelo(UI.modeloSel), ed = m && m.status === 'rascunho' && core.can('modelo.editar');
     const nItens = m ? m.sistemas.reduce((s, x) => s + x.itens.length, 0) : 0, nConf = m ? m.sistemas.flatMap(s => s.itens).filter(i => i.ref.status === 'CONFIRMADO').length : 0;
     el.innerHTML = `<div class="cab-tela"><h1>Modelos de checklist</h1></div>
