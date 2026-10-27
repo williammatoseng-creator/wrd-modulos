@@ -2249,8 +2249,12 @@ const WRDCore = (function () {
       const pessoa = state.pessoas.find(p => p.tipo === 'cliente' && norm(p.nome) === norm(nome));
       const cat = state.categorias.find(x => x.tipo === 'receita' && x.ativa);
       if (!cat) fail('Não há categoria de receita ativa.');
+      // Cada unidade (loja) é um projeto próprio do cliente, com o seu pedido de compra e o seu valor.
+      const unidade = String(item.unidade_nome || item.servico_nome || 'Unidade').trim();
+      if (!state.projetos.some(p => p.clienteId === pessoa.id && norm(p.nome) === norm(unidade))) salvarProjeto({ nome: unidade, clienteId: pessoa.id, descricao: 'Pedido ' + String(item.pedido || '') + ' (ME ' + String(item.pedido_me || '') + ')' }, { confirmar: true });
+      const projeto = state.projetos.find(p => p.clienteId === pessoa.id && norm(p.nome) === norm(unidade));
       const valor = Number(item.valor);
-      criarTitulo({ tipo: 'receber', aFaturar: true, pessoaId: pessoa.id, descricao: String(item.titulo_descricao || item.servico_nome || 'Serviço do Comercial'), categoriaId: cat.id, valor, competencia: item.data_venda, proposta: ref, contaId: null, obs: 'Aprovado no Comercial. Pedido ' + String(item.pedido || '') + ' (ME ' + String(item.pedido_me || '') + '). Data e NF entram quando o serviço for entregue.' }, { confirmar: true });
+      criarTitulo({ tipo: 'receber', aFaturar: true, pessoaId: pessoa.id, projetoId: projeto.id, descricao: String(item.titulo_descricao || item.servico_nome || 'Serviço do Comercial'), categoriaId: cat.id, valor, competencia: item.data_venda, proposta: ref, contaId: null, obs: 'Aprovado no Comercial. Pedido ' + String(item.pedido || '') + ' (ME ' + String(item.pedido_me || '') + '). Data e NF entram quando o serviço for entregue.' }, { confirmar: true });
       return { jaRecebida: false };
     }
     return {
@@ -2608,8 +2612,8 @@ const WRDCore = (function () {
     try {
       const lista = await NV.pendencias();
       box.dataset.ids = JSON.stringify(lista.map(i => i.id));
-      const linhas = lista.map(i => `<tr><td class="nowrap"><b>${esc(i.dados.codigo_oportunidade)}</b></td><td>${esc(i.dados.cliente_nome)}</td><td>${esc(i.dados.titulo_descricao || i.dados.servico_nome)}</td><td class="num">${R(Number(i.dados.valor))}</td><td>${esc(i.dados.pedido)}</td><td class="acoes"><button class="btn btn-sm btn-primario" data-act="receber-demanda-fin" data-id="${esc(i.id)}" data-origem="${esc(i.origem_ref)}" data-dados="${esc(JSON.stringify(i.dados))}">Receber a faturar</button></td></tr>`).join('');
-      box.innerHTML = `<h2>Receitas aprovadas no Comercial <span class="chip-n">${lista.length}</span></h2>` + (lista.length ? `<div class="tabela-wrap"><table class="tab"><thead><tr><th>Código</th><th>Cliente</th><th>Serviço</th><th class="num">Valor</th><th>Pedido</th><th></th></tr></thead><tbody>${linhas}</tbody></table></div><p class="ajuda">Entram como receita a faturar: sem data e sem conta até a NF e o cadastro bancário.</p>` : '<p class="ajuda">Nenhuma receita aguardando.</p>');
+      const linhas = lista.map(i => `<tr><td class="nowrap"><b>${esc(i.dados.codigo_oportunidade)}</b></td><td>${esc(i.dados.cliente_nome)} · ${esc(i.dados.unidade_nome || '')}</td><td>${esc(i.dados.servico_nome || i.dados.titulo_descricao)}</td><td class="num">${R(Number(i.dados.valor))}</td><td>${esc(i.dados.pedido)}</td><td class="acoes"><button class="btn btn-sm btn-primario" data-act="receber-demanda-fin" data-id="${esc(i.id)}" data-origem="${esc(i.origem_ref)}" data-dados="${esc(JSON.stringify(i.dados))}">Receber a faturar</button></td></tr>`).join('');
+      box.innerHTML = `<h2>Receitas aprovadas no Comercial <span class="chip-n">${lista.length}</span></h2>` + (lista.length ? `<div class="tabela-wrap"><table class="tab"><thead><tr><th>Código</th><th>Cliente · unidade</th><th>Serviço</th><th class="num">Valor</th><th>Pedido</th><th></th></tr></thead><tbody>${linhas}</tbody></table></div><p class="ajuda">Entram como receita a faturar: sem data e sem conta até a NF e o cadastro bancário.</p>` : '<p class="ajuda">Nenhuma receita aguardando.</p>');
     } catch (e) { box.innerHTML = `<h2>Receitas aprovadas no Comercial</h2><p class="ajuda">Não foi possível ler: ${esc(e.message)}</p>`; }
   }
   async function receberDemandaFinUI(id, btn) {
