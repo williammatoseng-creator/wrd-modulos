@@ -977,7 +977,9 @@ const WRDNuvem = (function () {
       catch (er) { if (janela) janela.close(); o.toast(er.message, 'erro'); }
     });
 
-    return { disponivel, abrir, parar, telaHTML, botaoTopo, pendencias: () => (cli && cli.conectado() ? cli.pendencias() : Promise.resolve([])), marcarRecebida: id => cli.marcarRecebida(id), abaConfig, posRender, usuarioEmail: () => (cli && cli.usuario() ? cli.usuario().email : null), publicarEvento: (tipo, id, payload) => (cli && cli.conectado() ? cli.publicarEvento(tipo, id, payload) : Promise.resolve(null)), ativo: () => !!sync, situacao: () => (sync ? sync.situacao() : null), anexoHTML, pdfNaNuvem, anexarLote };
+    return { disponivel, abrir, parar, telaHTML, botaoTopo, pendencias: () => (cli && cli.conectado() ? cli.pendencias() : Promise.resolve([])), marcarRecebida: id => cli.marcarRecebida(id),
+      /** Envia agora o que estiver pendente e informa se a nuvem confirmou. Só marcar a demanda como recebida depois disso. */
+      salvarAgora: async () => { if (!sync) return false; if (sync.situacao().pendente) await sync.enviar(); return !sync.situacao().pendente; }, abaConfig, posRender, usuarioEmail: () => (cli && cli.usuario() ? cli.usuario().email : null), publicarEvento: (tipo, id, payload) => (cli && cli.conectado() ? cli.publicarEvento(tipo, id, payload) : Promise.resolve(null)), ativo: () => !!sync, situacao: () => (sync ? sync.situacao() : null), anexoHTML, pdfNaNuvem, anexarLote };
   }
 
   return { CONFIG, cliente, sincronizador, mesclar, integrar, MSG };
@@ -3246,7 +3248,9 @@ if (typeof module !== 'undefined') module.exports = WRDDemo;
     const i = DEMANDAS.get(id); if (!i) { toast('Demanda não encontrada. Atualize a tela.', 'erro'); return; }
     const r = await executar(() => core.receberDemanda(Object.assign({ origem_ref: i.origem_ref }, i.dados)), {}, 'Demanda recebida na Operação.');
     if (!r.ok) return;
-    try { await NV.marcarRecebida(id); } catch (e) { toast('Serviço criado, mas a nuvem não confirmou o recebimento: ' + e.message, 'erro'); }
+    // Só marca como recebida depois que a nuvem confirma o serviço; senão a demanda some da fila sem o registro salvo.
+    if (!(await NV.salvarAgora())) { toast('Serviço criado neste aparelho, mas a nuvem não confirmou. A demanda continua na fila; tente de novo.', 'erro'); carregarDemandas(); return; }
+    try { await NV.marcarRecebida(id); } catch (e) { toast('Serviço salvo, mas a nuvem não confirmou o recebimento: ' + e.message, 'erro'); }
     carregarDemandas();
   }
   function telaVisao(el) {

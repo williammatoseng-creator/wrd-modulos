@@ -980,7 +980,9 @@ const WRDNuvem = (function () {
       catch (er) { if (janela) janela.close(); o.toast(er.message, 'erro'); }
     });
 
-    return { disponivel, abrir, parar, telaHTML, botaoTopo, pendencias: () => (cli && cli.conectado() ? cli.pendencias() : Promise.resolve([])), marcarRecebida: id => cli.marcarRecebida(id), abaConfig, posRender, usuarioEmail: () => (cli && cli.usuario() ? cli.usuario().email : null), publicarEvento: (tipo, id, payload) => (cli && cli.conectado() ? cli.publicarEvento(tipo, id, payload) : Promise.resolve(null)), ativo: () => !!sync, situacao: () => (sync ? sync.situacao() : null), anexoHTML, pdfNaNuvem, anexarLote };
+    return { disponivel, abrir, parar, telaHTML, botaoTopo, pendencias: () => (cli && cli.conectado() ? cli.pendencias() : Promise.resolve([])), marcarRecebida: id => cli.marcarRecebida(id),
+      /** Envia agora o que estiver pendente e informa se a nuvem confirmou. Só marcar a demanda como recebida depois disso. */
+      salvarAgora: async () => { if (!sync) return false; if (sync.situacao().pendente) await sync.enviar(); return !sync.situacao().pendente; }, abaConfig, posRender, usuarioEmail: () => (cli && cli.usuario() ? cli.usuario().email : null), publicarEvento: (tipo, id, payload) => (cli && cli.conectado() ? cli.publicarEvento(tipo, id, payload) : Promise.resolve(null)), ativo: () => !!sync, situacao: () => (sync ? sync.situacao() : null), anexoHTML, pdfNaNuvem, anexarLote };
   }
 
   return { CONFIG, cliente, sincronizador, mesclar, integrar, MSG };
@@ -1330,9 +1332,12 @@ const WRDCom = (function () {
     }
     const queue = (evt, p) => pend.push([evt, p]);
     function stamp(obj, prefix) { const ts = nowISO(); return Object.assign({ id: uid(prefix), createdAt: ts, updatedAt: ts, schemaVersion: SCHEMA_VERSION }, obj); }
+    /* Próximo código do ano. Nunca reaproveita um código já usado: considera o contador salvo e o maior código existente. */
     function proxCodigo(prefixo) {
-      const ano = hoje().slice(0, 4), k = prefixo + '-' + ano;
-      state.config.seq[k] = (state.config.seq[k] || 0) + 1;
+      const ano = hoje().slice(0, 4), k = prefixo + '-' + ano, pref = k + '-';
+      const maiorExistente = ['clientes', 'oportunidades', 'atividades'].flatMap(c => state[c] || [])
+        .map(x => String(x.codigo || '')).filter(c => c.startsWith(pref)).reduce((m, c) => Math.max(m, parseInt(c.slice(pref.length), 10) || 0), 0);
+      state.config.seq[k] = Math.max(state.config.seq[k] || 0, maiorExistente) + 1;
       return `${prefixo}-${ano}-${String(state.config.seq[k]).padStart(4, '0')}`;
     }
     function idx() {

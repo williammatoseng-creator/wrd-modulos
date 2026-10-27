@@ -1011,7 +1011,9 @@ const WRDNuvem = (function () {
       catch (er) { if (janela) janela.close(); o.toast(er.message, 'erro'); }
     });
 
-    return { disponivel, abrir, parar, telaHTML, botaoTopo, pendencias: () => (cli && cli.conectado() ? cli.pendencias() : Promise.resolve([])), marcarRecebida: id => cli.marcarRecebida(id), abaConfig, posRender, usuarioEmail: () => (cli && cli.usuario() ? cli.usuario().email : null), publicarEvento: (tipo, id, payload) => (cli && cli.conectado() ? cli.publicarEvento(tipo, id, payload) : Promise.resolve(null)), ativo: () => !!sync, situacao: () => (sync ? sync.situacao() : null), anexoHTML, pdfNaNuvem, anexarLote };
+    return { disponivel, abrir, parar, telaHTML, botaoTopo, pendencias: () => (cli && cli.conectado() ? cli.pendencias() : Promise.resolve([])), marcarRecebida: id => cli.marcarRecebida(id),
+      /** Envia agora o que estiver pendente e informa se a nuvem confirmou. Só marcar a demanda como recebida depois disso. */
+      salvarAgora: async () => { if (!sync) return false; if (sync.situacao().pendente) await sync.enviar(); return !sync.situacao().pendente; }, abaConfig, posRender, usuarioEmail: () => (cli && cli.usuario() ? cli.usuario().email : null), publicarEvento: (tipo, id, payload) => (cli && cli.conectado() ? cli.publicarEvento(tipo, id, payload) : Promise.resolve(null)), ativo: () => !!sync, situacao: () => (sync ? sync.situacao() : null), anexoHTML, pdfNaNuvem, anexarLote };
   }
 
   return { CONFIG, cliente, sincronizador, mesclar, integrar, MSG };
@@ -3071,7 +3073,7 @@ function criarRelatorios(core, evid) {
       <p>Inspeção dos sistemas de prevenção e combate a incêndio, com fotos, não conformidades, plano de ação e relatório no padrão WRD.</p>
       <div class="grade"><button class="btn btn-primario btn-grande" data-act="modo" data-modo="real">Entrar no sistema</button>
       <button class="btn btn-grande" data-act="modo" data-modo="demo">Abrir demonstração (dados fictícios)</button></div>
-      <p class="ajuda">A demonstração usa um armazenamento separado e nunca se mistura com os dados reais.</p><p class="ajuda">Versão 2.1.0 · build 27/10/2026, 13:40</p></div></div>`;
+      <p class="ajuda">A demonstração usa um armazenamento separado e nunca se mistura com os dados reais.</p><p class="ajuda">Versão 2.1.0 · build 27/10/2026, 16:57</p></div></div>`;
   }
   function telaLogin() {
     const primeiro = !core.hasUsers();
