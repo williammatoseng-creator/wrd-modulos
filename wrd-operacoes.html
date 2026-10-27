@@ -665,8 +665,8 @@ const WRDNuvem = (function () {
       async uso() { return http('/rest/v1/rpc/uso_modulos', { method: 'POST', body: '{}' }, true); },
       /** Demandas aprovadas no Comercial aguardando este módulo (tabela importacoes, status pendente). */
       async pendencias() { return (await http(`/rest/v1/importacoes?modulo=eq.${modulo}&status=eq.pendente&select=*&order=criado_em.asc`, { method: 'GET' }, true)) || []; },
-      /** Marca a demanda como recebida por este módulo (o registro da fila permanece). */
-      async marcarRecebida(id) { return http(`/rest/v1/importacoes?id=eq.${encodeURIComponent(id)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ status: 'aceita', revisado_em: new Date().toISOString() }) }, true); },
+      /** Marca a demanda como recebida por este módulo (o registro da fila permanece). A regra do banco exige status 'importado' e revisado_por = quem está logado. */
+      async marcarRecebida(id) { const uid = sessao && sessao.user ? sessao.user.id : null; return http(`/rest/v1/importacoes?id=eq.${encodeURIComponent(id)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ status: 'importado', revisado_por: uid, revisado_em: new Date().toISOString() }) }, true); },
       /** Envia um PDF ao bucket privado "documentos" (pasta do módulo). Devolve o caminho guardado no registro. */
       async enviarPdf(blob) {
         await garantirToken();

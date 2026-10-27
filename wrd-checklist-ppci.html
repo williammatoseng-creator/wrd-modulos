@@ -699,8 +699,8 @@ const WRDNuvem = (function () {
       async uso() { return http('/rest/v1/rpc/uso_modulos', { method: 'POST', body: '{}' }, true); },
       /** Demandas aprovadas no Comercial aguardando este módulo (tabela importacoes, status pendente). */
       async pendencias() { return (await http(`/rest/v1/importacoes?modulo=eq.${modulo}&status=eq.pendente&select=*&order=criado_em.asc`, { method: 'GET' }, true)) || []; },
-      /** Marca a demanda como recebida por este módulo (o registro da fila permanece). */
-      async marcarRecebida(id) { return http(`/rest/v1/importacoes?id=eq.${encodeURIComponent(id)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ status: 'aceita', revisado_em: new Date().toISOString() }) }, true); },
+      /** Marca a demanda como recebida por este módulo (o registro da fila permanece). A regra do banco exige status 'importado' e revisado_por = quem está logado. */
+      async marcarRecebida(id) { const uid = sessao && sessao.user ? sessao.user.id : null; return http(`/rest/v1/importacoes?id=eq.${encodeURIComponent(id)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ status: 'importado', revisado_por: uid, revisado_em: new Date().toISOString() }) }, true); },
       /** Envia um PDF ao bucket privado "documentos" (pasta do módulo). Devolve o caminho guardado no registro. */
       async enviarPdf(blob) {
         await garantirToken();
@@ -3071,7 +3071,7 @@ function criarRelatorios(core, evid) {
       <p>Inspeção dos sistemas de prevenção e combate a incêndio, com fotos, não conformidades, plano de ação e relatório no padrão WRD.</p>
       <div class="grade"><button class="btn btn-primario btn-grande" data-act="modo" data-modo="real">Entrar no sistema</button>
       <button class="btn btn-grande" data-act="modo" data-modo="demo">Abrir demonstração (dados fictícios)</button></div>
-      <p class="ajuda">A demonstração usa um armazenamento separado e nunca se mistura com os dados reais.</p><p class="ajuda">Versão 2.1.0 · build 27/10/2026, 09:13</p></div></div>`;
+      <p class="ajuda">A demonstração usa um armazenamento separado e nunca se mistura com os dados reais.</p><p class="ajuda">Versão 2.1.0 · build 27/10/2026, 13:40</p></div></div>`;
   }
   function telaLogin() {
     const primeiro = !core.hasUsers();
