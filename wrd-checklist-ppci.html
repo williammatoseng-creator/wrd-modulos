@@ -610,6 +610,10 @@ table.tab tr.clicavel:hover td { background: var(--cor-primaria-suave); }
 .item-txt { flex: 1 1 260px; }
 .item-cab > .btn-cam { flex: 0 0 auto; }
 .item-cab { flex-wrap: wrap; }
+.menu-sec { margin: var(--esp-2) 0; }
+.menu-sec > summary { list-style: none; display: inline-block; }
+.menu-sec > summary::-webkit-details-marker { display: none; }
+.menu-sec-corpo { display: flex; flex-wrap: wrap; gap: var(--esp-2); margin-top: var(--esp-2); }
 
 </style>
 </head>
@@ -3271,15 +3275,15 @@ function criarRelatorios(core, evid) {
     const progArea = ar => { const its = core.itensDaInspecao(i).filter(x => x.area.id === ar.id); const r = its.filter(x => x.resp && x.resp.situacao).length; return `${r}/${its.length}`; };
     el.innerHTML = `<div class="cab-tela"><h1>Vistoria — ${dataBR(i.data)}</h1><div class="linha">
         ${core.can('inspecao.salvar') ? '<button class="btn btn-sm btn-primario" data-act="nova-inspecao">+ Nova inspeção</button>' : ''}
-        <button class="btn btn-sm" data-act="dados-insp">Dados da inspeção</button><button class="btn btn-sm" data-act="documentos">Documentos (${i.documentos.length})</button>
         ${fechada ? (core.can('inspecao.reabrir') ? '<button class="btn btn-sm" data-act="reabrir">Reabrir</button>' : '') : (core.can('inspecao.encerrar') ? '<button class="btn btn-sm btn-primario" data-act="encerrar">Encerrar inspeção</button>' : '')}</div></div>
+      <details class="menu-sec"><summary class="btn btn-sm">Mais opções</summary><div class="menu-sec-corpo"><button class="btn btn-sm" data-act="dados-insp">Dados da inspeção</button><button class="btn btn-sm" data-act="documentos">Documentos (${i.documentos.length})</button>${podeEditar ? '<button class="btn btn-sm" data-act="editar-area">Sistemas da área</button>' : ''}</div></details>
       ${fechada ? `<p class="msg-ok">Inspeção encerrada em ${dataBR(i.encerradaEm)} às ${horaBR(i.encerradaEm)}. Para alterar, reabra (perfil RT ou administrador).</p>` : ''}
       ${!i.modelo.revisaoRT ? `<p class="msg-aviso">Modelo v${esc(i.modelo.versao)}: revisão do RT pendente. Referências "A VALIDAR" ainda não conferidas.</p>` : ''}
       <div class="contagens"><span class="chip ok">C ${p.C}</span><span class="chip critico">NC ${p.NC}</span><span class="chip">NA ${p.NA}</span><span class="chip alerta">NV ${p.NV}</span><span class="chip ${p.pendente ? 'alerta' : 'ok'}">Pendentes ${p.pendente}</span></div>
       <h2 class="peq muted">Áreas visitadas</h2>
       <div class="areas" role="group" aria-label="Áreas">${i.areas.map(ar => `<button class="area-btn" data-act="area" data-id="${ar.id}" aria-pressed="${ar.id === UI.areaId}"><b>${esc(ar.nome)}</b><span>${progArea(ar)} itens</span></button>`).join('')}${podeEditar ? '<button class="area-btn nova" data-act="nova-area">+ Área</button>' : ''}</div>
       ${a ? `<div class="linha entre"><div class="chips" role="group" aria-label="Filtro de itens">${[['todos', 'Todos'], ['pendentes', 'Pendentes'], ['NC', 'Não conformes']].map(([k, r]) => `<button class="chip-btn" data-act="filtro" data-f="${k}" aria-pressed="${UI.filtro === k}">${r}</button>`).join('')}</div>
-          <div class="linha">${podeEditar ? '<button class="btn btn-sm" data-act="editar-area">Sistemas da área</button>' : ''}<input type="search" id="busca-item" placeholder="Buscar item…" value="${esc(UI.busca)}" aria-label="Buscar item"></div></div>
+          <div class="linha"><input type="search" id="busca-item" placeholder="Buscar item…" value="${esc(UI.busca)}" aria-label="Buscar item"></div></div>
         <div class="lista-itens" id="lista-itens">${listaItens(i, a, podeEditar)}</div>
         ${podeEditar ? '<div class="salvar-fim"><button class="btn btn-primario btn-grande" data-act="salvar-insp">Salvar inspeção</button></div>' : ''}<div class="acoes-fixas"><button class="btn btn-primario" data-act="prox-pendente">Próximo pendente</button>${podeEditar && core.can('foto.salvar') ? `<button class="btn" data-act="foto-area" title="Foto geral da área">📷 Foto da área</button>` : ''}</div>`
         : `<div class="cartao"><p>Nenhuma área registrada. Crie as áreas durante a visita (portaria, administrativo, casa de bombas…).</p>${podeEditar ? '<button class="btn btn-primario btn-grande" data-act="nova-area">+ Criar área</button>' : ''}</div>`}`;
