@@ -310,7 +310,8 @@
 
   const $ = id => document.getElementById(id);
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const brl = v => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  // Os valores vêm da nuvem em centavos (como no Comercial e no Financeiro): divide por 100 antes de mostrar em reais.
+  const brl = v => (Number(v || 0) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
   const pct = v => (v == null || isNaN(v) ? '—' : (v * 100).toLocaleString('pt-BR', { maximumFractionDigits: 0 }) + '%');
   const dataCurta = s => (s ? new Date(s).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '—');
   const hojeISO = () => new Date(new Date().getTime() - 3 * 3600 * 1000).toISOString().slice(0, 10);
