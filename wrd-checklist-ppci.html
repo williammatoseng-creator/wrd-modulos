@@ -605,6 +605,12 @@ table.tab tr.clicavel:hover td { background: var(--cor-primaria-suave); }
 .rolagem-topo { overflow-x: auto; overflow-y: hidden; height: var(--esp-4); margin-bottom: var(--esp-1); }
 .rolagem-topo > div { height: var(--borda); }
 
+/* Ajustes de uso em celular (revisão de simplicidade): texto do item ocupa a linha; botões quebram o texto em vez de vazar. */
+.btn { white-space: normal; max-width: 100%; text-align: center; }
+.item-txt { flex: 1 1 260px; }
+.item-cab > .btn-cam { flex: 0 0 auto; }
+.item-cab { flex-wrap: wrap; }
+
 </style>
 </head>
 <body>
@@ -3193,6 +3199,7 @@ function criarRelatorios(core, evid) {
   function atualizarSalvo() { const el = $('#ctx-salvo'); if (!el || !core) return; const s = core.statusSalvamento(); el.textContent = s.erro ? 'Erro ao salvar!' : s.ultimoSalvo ? `Salvo no aparelho às ${horaBR(s.ultimoSalvo)}` : ''; }
   function chipEnvio(r) {
     if (!r.total) return '<span class="chip">Sem fotos</span>';
+    if (evid.adaptador().id === 'nenhum') return '<span class="chip" title="O envio para servidor está desligado: as fotos ficam neste aparelho e foram conferidas ao serem gravadas.">' + r.total + ' foto(s) no aparelho</span>';
     if (r.sincronizada) return `<span class="chip ok" title="Todas as fotos confirmadas pelo adaptador de envio">Fotos confirmadas${evid.adaptador().simulado ? ' (servidor SIMULADO)' : ''}</span>`;
     return `<span class="chip ${r.falha ? 'critico' : 'alerta'}" title="${esc(evid.motivo())}">${r.naoConfirmados} foto(s) não confirmada(s)${r.falha ? ` · ${r.falha} falha(s)` : ''}</span>`;
   }
@@ -3267,7 +3274,7 @@ function criarRelatorios(core, evid) {
         <button class="btn btn-sm" data-act="dados-insp">Dados da inspeção</button><button class="btn btn-sm" data-act="documentos">Documentos (${i.documentos.length})</button>
         ${fechada ? (core.can('inspecao.reabrir') ? '<button class="btn btn-sm" data-act="reabrir">Reabrir</button>' : '') : (core.can('inspecao.encerrar') ? '<button class="btn btn-sm btn-primario" data-act="encerrar">Encerrar inspeção</button>' : '')}</div></div>
       ${fechada ? `<p class="msg-ok">Inspeção encerrada em ${dataBR(i.encerradaEm)} às ${horaBR(i.encerradaEm)}. Para alterar, reabra (perfil RT ou administrador).</p>` : ''}
-      ${!i.modelo.revisaoRT ? `<p class="msg-aviso">Modelo ${esc(i.modelo.nome)} v${esc(i.modelo.versao)}: revisão do responsável técnico pendente. As referências marcadas "A VALIDAR" não foram conferidas na fonte.</p>` : ''}
+      ${!i.modelo.revisaoRT ? `<p class="msg-aviso">Modelo v${esc(i.modelo.versao)}: revisão do RT pendente. Referências "A VALIDAR" ainda não conferidas.</p>` : ''}
       <div class="contagens"><span class="chip ok">C ${p.C}</span><span class="chip critico">NC ${p.NC}</span><span class="chip">NA ${p.NA}</span><span class="chip alerta">NV ${p.NV}</span><span class="chip ${p.pendente ? 'alerta' : 'ok'}">Pendentes ${p.pendente}</span></div>
       <h2 class="peq muted">Áreas visitadas</h2>
       <div class="areas" role="group" aria-label="Áreas">${i.areas.map(ar => `<button class="area-btn" data-act="area" data-id="${ar.id}" aria-pressed="${ar.id === UI.areaId}"><b>${esc(ar.nome)}</b><span>${progArea(ar)} itens</span></button>`).join('')}${podeEditar ? '<button class="area-btn nova" data-act="nova-area">+ Área</button>' : ''}</div>
