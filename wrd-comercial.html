@@ -1134,6 +1134,8 @@ const WRDCom = (function () {
   const SIT_PROP = { rascunho: 'Rascunho', enviada: 'Enviada', em_revisao: 'Em revisão', aprovada: 'Aprovada', recusada: 'Recusada', vencida: 'Vencida' };
   const PROP_AGUARDANDO = ['enviada', 'em_revisao'];
   const PRIORIDADES = { baixa: 'Baixa', media: 'Média', alta: 'Alta', urgente: 'Urgente' };
+  /* Modelo de negócio da oportunidade: pontual (serviço único) ou recorrente mensal (contrato que se repete todo mês). */
+  const MODELOS_NEGOCIO = { pontual: 'Pontual', recorrente: 'Recorrente mensal' };
   const PRIO_ORD = { urgente: 0, alta: 1, media: 2, baixa: 3 };
   const SIT_VENC = { ativo: 'Ativo', renovado: 'Renovado', encerrado: 'Encerrado' };
   const BASES_PERIODO = { criacao: 'data de criação da oportunidade', envio: 'data de envio da proposta vigente', fechamento: 'data de fechamento (ganha ou perdida)' };
@@ -1867,9 +1869,10 @@ const WRDCom = (function () {
       if (d.servicoId && !byId('servicos', d.servicoId)) fail('Serviço não encontrado no catálogo.');
       if (d.origem && !state.config.origens.includes(d.origem) && !(ex && ex.origem === d.origem)) fail('Origem não cadastrada.');
       if (d.prioridade) oneOf(d.prioridade, PRIORIDADES, 'Prioridade');
+      if (d.modeloNegocio) oneOf(d.modeloNegocio, MODELOS_NEGOCIO, 'Modelo de negócio');
       const campos = {
         titulo, clienteId: cli.id, unidadeId: d.unidadeId || '', contatoId: d.contatoId || '', servicoId: d.servicoId || '', necessidade: txt(d.necessidade), origem: txt(d.origem),
-        responsavelId: validarUserId(d.responsavelId, 'o responsável', false), prioridade: d.prioridade || 'media',
+        responsavelId: validarUserId(d.responsavelId, 'o responsável', false), prioridade: d.prioridade || 'media', modeloNegocio: d.modeloNegocio || (ex && ex.modeloNegocio) || 'pontual',
         valorEstimado: validarValor(d.valorEstimado, 'o valor estimado', false), previsaoFechamento: validarData(d.previsaoFechamento, 'a previsão de fechamento', false),
         ultimoContatoManual: validarData(d.ultimoContatoManual, 'a data do último contato', false), obs: txt(d.obs), anexos: validarAnexos(d.anexos)
       };
@@ -1952,7 +1955,7 @@ const WRDCom = (function () {
       if (prop && prop.situacao !== 'aprovada') { const de = prop.situacao; prop.situacao = 'aprovada'; prop.updatedAt = nowISO(); log({ acao: 'proposta.situacao', entidade: 'proposta', entidadeId: prop.id, codigo: `${prop.numero}-${prop.revisao}`, oportunidadeId: o.id, clienteId: o.clienteId, campo: 'Situação', de: SIT_PROP[de], para: SIT_PROP.aprovada }); }
       registrarEtapa(o, etapaGanha().id, 'Fechamento registrado');
       const cliEv = byId('clientes', o.clienteId) || {};
-      log({ acao: 'oportunidade.ganha', entidade: 'oportunidade', entidadeId: o.id, codigo: o.codigo, oportunidadeId: o.id, clienteId: o.clienteId, campo: 'Valor aprovado', de: fM(antes.valorAprovado), para: fM(valor), detalhe: `Ganha em ${fD(data)}. Aceite: ${evid || (anexos.length ? 'anexo' : 'sem evidência registrada')}. Contato: ${ct.nome}.`, payload: { clienteId: o.clienteId, servicoId: o.servicoId, valor, data, clienteNome: cliEv.razaoSocial || cliEv.nomeFantasia || '', unidadeNome: (o.unidadeId && (byId('unidades', o.unidadeId) || {}).nome) || '', unidadeCidade: (o.unidadeId && (byId('unidades', o.unidadeId) || {}).cidade) || cliEv.cidade || '', unidadeUf: (o.unidadeId && (byId('unidades', o.unidadeId) || {}).uf) || cliEv.uf || '', unidadeEndereco: (o.unidadeId && (byId('unidades', o.unidadeId) || {}).endereco) || '', servicoNome: nomeServico(o.servicoId), contatoNome: ct.nome || '', contatoEmail: ct.email || '', evidencia: evid || '' } });
+      log({ acao: 'oportunidade.ganha', entidade: 'oportunidade', entidadeId: o.id, codigo: o.codigo, oportunidadeId: o.id, clienteId: o.clienteId, campo: 'Valor aprovado', de: fM(antes.valorAprovado), para: fM(valor), detalhe: `Ganha em ${fD(data)}. Aceite: ${evid || (anexos.length ? 'anexo' : 'sem evidência registrada')}. Contato: ${ct.nome}.`, payload: { clienteId: o.clienteId, servicoId: o.servicoId, valor, data, clienteNome: cliEv.razaoSocial || cliEv.nomeFantasia || '', unidadeNome: (o.unidadeId && (byId('unidades', o.unidadeId) || {}).nome) || '', unidadeCidade: (o.unidadeId && (byId('unidades', o.unidadeId) || {}).cidade) || cliEv.cidade || '', unidadeUf: (o.unidadeId && (byId('unidades', o.unidadeId) || {}).uf) || cliEv.uf || '', unidadeEndereco: (o.unidadeId && (byId('unidades', o.unidadeId) || {}).endereco) || '', servicoNome: nomeServico(o.servicoId), contatoNome: ct.nome || '', contatoEmail: ct.email || '', evidencia: evid || '', modeloNegocio: o.modeloNegocio || 'pontual' } });
       const cli = byId('clientes', o.clienteId);
       if (cli.condicao !== 'cliente') { cli.condicao = 'cliente'; cli.clienteDesde = data; cli.condicaoOrigem = `Venda ${o.codigo}`; cli.updatedAt = nowISO(); log({ acao: 'cliente.condicao', entidade: 'cliente', entidadeId: cli.id, codigo: cli.codigo, clienteId: cli.id, campo: 'Condição', de: 'prospect', para: 'cliente', detalhe: `Passou a cliente pela venda ${o.codigo}.` }); }
       const temEvid = !!(evid || anexos.length);
@@ -2799,7 +2802,7 @@ const WRDCom = (function () {
     }
 
     return {
-      MODULO_ID, SCHEMA_VERSION, demo, TIPOS_ATIV, SIT_ATIV, SIT_PROP, PRIORIDADES, SIT_VENC, PERFIS, BASES_PERIODO, UFS,
+      MODULO_ID, SCHEMA_VERSION, demo, TIPOS_ATIV, SIT_ATIV, SIT_PROP, PRIORIDADES, MODELOS_NEGOCIO, SIT_VENC, PERFIS, BASES_PERIODO, UFS,
       Dates, Money, hoje, dataLocal, on, emitir: (e, p) => emit(e, p),
       hasUsers, setupAdmin, login, logout, usuariosDemo, entrarDemo, entrarPelaNuvem, user, can, isAdmin, listarUsuarios, salvarUsuario, alterarSenha, equipe,
       config, salvarConfig, salvarEtapas, etapas: () => { guard('ler'); return clone(etapas()); }, servicos, salvarServico,
@@ -3149,7 +3152,7 @@ if (typeof module !== 'undefined') module.exports = WRDDemo;
       <label class="campo">Origem<select name="origem">${optLista('origens', x.origem, '—')}</select></label>
       <label class="campo span2">Necessidade apresentada<textarea name="necessidade">${esc(x.necessidade)}</textarea></label>
       <label class="campo">Responsável<select name="responsavelId">${optEquipe(x.responsavelId || (novo ? core.user().userId : ''), '—')}</select></label>
-      <label class="campo">Prioridade<select name="prioridade">${opcoes(Object.entries(core.PRIORIDADES), x.prioridade || 'media')}</select></label>
+      <label class="campo">Prioridade<select name="prioridade">${opcoes(Object.entries(core.PRIORIDADES), x.prioridade || 'media')}</select></label><label class="campo">Modelo de negócio<select name="modeloNegocio">${opcoes(Object.entries(core.MODELOS_NEGOCIO), x.modeloNegocio || 'pontual')}</select></label>
       <label class="campo">Valor estimado (R$)<input name="valorEstimado" inputmode="decimal" value="${x.valorEstimado != null ? M.num(x.valorEstimado) : ''}" placeholder="0,00"></label>
       <label class="campo">Previsão de fechamento<input type="date" name="previsaoFechamento" value="${esc(x.previsaoFechamento)}"></label>
       <fieldset class="destaque span2"><legend>Próxima ação <span class="req">*</span> <span class="ajuda">obrigatória para oportunidade em aberto — vira atividade na agenda</span></legend><div class="grade g3">
@@ -3421,7 +3424,7 @@ if (typeof module !== 'undefined') module.exports = WRDDemo;
         <div class="kv"><dt>Serviço</dt><dd>${esc(o.servicoNome || '—')}</dd></div>
         <div class="kv"><dt>Responsável</dt><dd>${esc(o.responsavelNome || '—')}</dd></div>
         <div class="kv"><dt>Origem</dt><dd>${esc(o.origem || '—')}</dd></div>
-        <div class="kv"><dt>Prioridade</dt><dd><span class="chip prio-${o.prioridade}">${esc(o.prioridadeRotulo)}</span></dd></div>
+        <div class="kv"><dt>Prioridade</dt><dd><span class="chip prio-${o.prioridade}">${esc(o.prioridadeRotulo)}</span></dd></div><div class="kv"><dt>Modelo de negócio</dt><dd>${esc(core.MODELOS_NEGOCIO[o.modeloNegocio || 'pontual'] || 'Pontual')}</dd></div>
         <div class="kv"><dt>Valor no funil</dt><dd><b>${fm(o.valorFunil)}</b> <span class="muted xs">${esc(o.baseValor)}</span></dd></div>
         <div class="kv"><dt>Valor estimado</dt><dd>${fm(o.valorEstimado)}</dd></div>
         <div class="kv"><dt>Valor final aprovado</dt><dd>${o.ganho ? '<b>' + fm(o.ganho.valor) + '</b>' : '—'}</dd></div>
