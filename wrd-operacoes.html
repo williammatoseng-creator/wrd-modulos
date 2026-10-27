@@ -2731,8 +2731,8 @@ const WRDOps = (function () {
       if (!razao) fail('Demanda sem nome do cliente.');
       if (!state.clientes.some(x => norm(x.razaoSocial) === norm(razao))) salvarCliente({ razaoSocial: razao }, { confirmar: true });
       const cli = state.clientes.find(x => norm(x.razaoSocial) === norm(razao));
-      const nomeUni = txt(item.unidade_nome);
-      if (!nomeUni) fail('Demanda sem nome da unidade.');
+      // Cliente sem unidade cadastrada (ex.: empresa de uma unidade só): a própria empresa vira a unidade.
+      const nomeUni = txt(item.unidade_nome) || razao;
       if (!state.unidades.some(u => u.clienteId === cli.id && norm(u.nome) === norm(nomeUni))) salvarUnidade({ clienteId: cli.id, nome: nomeUni, endereco: txt(item.unidade_endereco), cidade: txt(item.unidade_cidade), uf: txt(item.unidade_uf) });
       const uni = state.unidades.find(u => u.clienteId === cli.id && norm(u.nome) === norm(nomeUni));
       const nomeTipo = txt(item.servico_nome) || 'Serviço do Comercial';
