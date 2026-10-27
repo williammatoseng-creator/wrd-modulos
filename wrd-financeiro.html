@@ -2779,8 +2779,8 @@ const WRDCore = (function () {
       return `<tr class="clicavel ${t.cancelado ? 'riscado' : ''}" data-act="detalhe" data-id="${t.id}">
         <td data-l="Vencimento" class="num">${t.vencimento ? D(t.vencimento) : '<span class="chip">Sem data</span>'}</td>
         ${o.mostrarTipo ? `<td data-l="Tipo">${t.tipo === 'receber' ? 'Receber' : 'Pagar'}</td>` : ''}
-        <td data-l="${t.tipo === 'receber' ? 'Cliente' : 'Fornecedor'}">${esc(t.pessoaNome)}</td>
-        <td data-l="Descrição">${esc(t.descricao)}${t.serieRotulo ? ` <span class="muted xs">(${t.serieRotulo})</span>` : ''}${t.projetoNome ? `<div class="xs muted">${esc(t.projetoNome)}</div>` : ''}</td>
+        <td data-l="${t.tipo === 'receber' ? 'Cliente · unidade' : 'Fornecedor'}"><b>${esc(t.pessoaNome)}</b>${t.projetoNome ? `<div class="xs">${esc(t.projetoNome)}</div>` : ''}</td>
+        <td data-l="Descrição">${esc(t.descricao)}${t.serieRotulo ? ` <span class="muted xs">(${t.serieRotulo})</span>` : ''}</td>
         ${o.mostrarTipo ? '' : `<td data-l="Categoria" class="peq">${esc(t.categoriaNome)}</td>`}
         <td data-l="Valor" class="num">${R(t.valor)}</td>
         <td data-l="${t.tipo === 'receber' ? 'Recebido' : 'Pago'}" class="num">${t.pago ? R(t.pago) : '—'}</td>
