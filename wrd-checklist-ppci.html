@@ -3241,11 +3241,11 @@ function criarRelatorios(core, evid) {
     const mods = modelosVigentes(core.listarModelos()).filter(m => m.status === 'publicado');
     const agora = new Date().toTimeString().slice(0, 5);
     const m = modal('Nova inspeção', `<form id="f-ni" class="grade g2">
-      ${campo('Cliente (empresa)', `<select name="empresaId" required>${opt('', 'Escolha…')}${emps.map(e => opt(e.id, e.nome)).join('')}</select>`, { req: true })}
-      ${campo('Unidade', '<select name="unidadeId" required disabled><option value="">Escolha o cliente</option></select>', { req: true, ajuda: 'Sem unidade cadastrada? Preencha os dados abaixo: ela é criada junto com a inspeção.' })}
+      ${campo('Cliente (empresa)', `<select name="empresaId">${opt('', 'Escolha…')}${emps.map(e => opt(e.id, e.nome)).join('')}</select>`)}
+      ${campo('Unidade', '<select name="unidadeId" disabled><option value="">Escolha o cliente</option></select>', { ajuda: 'Sem unidade cadastrada? Preencha os dados abaixo: ela é criada junto com a inspeção.' })}
       <div class="span2" id="ni-unidade-nova"><div class="grade g2">${inp('uNome', '', { extra: ' placeholder="ex.: Loja Centro"' })}${inp('uUf', '', { extra: ' placeholder="SP" maxlength="2"' })}${inp('uEnd', '', { extra: ' placeholder="Rua, número"' })}${inp('uCid', '', { extra: ' placeholder="Cidade"' })}</div></div>
-      ${campo('Modelo de checklist (versão publicada)', `<select name="modeloId" required>${mods.map(x => opt(x.id, `${x.nome} — v${x.versao}${x.revisaoRT ? '' : ' (revisão do RT pendente)'}`)).join('')}</select>`, { req: true, cls: 'span2', ajuda: 'A inspeção congela a versão escolhida; mudanças posteriores no modelo não a afetam.' })}
-      ${campo('Data', inp('data', hojeISO(), { type: 'date', req: true }), { req: true })}${campo('Hora de início', inp('horaInicio', agora, { type: 'time' }))}
+      ${campo('Modelo de checklist (versão publicada)', `<select name="modeloId">${mods.map(x => opt(x.id, `${x.nome} — v${x.versao}${x.revisaoRT ? '' : ' (revisão do RT pendente)'}`)).join('')}</select>`, { req: true, cls: 'span2', ajuda: 'A inspeção congela a versão escolhida; mudanças posteriores no modelo não a afetam.' })}
+      ${campo('Data', inp('data', hojeISO(), { type: 'date' }))}${campo('Hora de início', inp('horaInicio', agora, { type: 'time' }))}
       ${campo('Acompanhantes', inp('acompanhantes', ''), { cls: 'span2', ajuda: 'Nome e função de quem acompanhou.' })}
       ${campo('Proposta de origem', inp('proposta', '', { extra: ' placeholder="NNNNNN-R" inputmode="numeric"' }), { ajuda: 'Gera o código do relatório (PCI-NNNNNN-R).' })}
       ${campo('ART nº', inp('artNumero', ''))}${campo('ART registrada em', inp('artData', '', { type: 'date' }))}
@@ -3259,18 +3259,23 @@ function criarRelatorios(core, evid) {
     sU.onchange = conferir; f.querySelector('[name=uUf]').oninput = conferir;
     f.querySelector('[name=modeloId]').onchange = conferir; conferir();
     m.querySelector('[data-fechar2]').onclick = () => m.fechar();
-    m.querySelector('[data-ok]').onclick = () => tentar(() => {
-      const mod = core.modelo(fv(f, 'modeloId'));
-      let unidadeId = sU.value;
-      if (novaUnidade()) {
-        if (!fv(f, 'uNome').trim()) throw new Error('Informe o nome da unidade.');
-        const uf = ufDaUnidade(); if (!/^[A-Z]{2}$/.test(uf)) throw new Error('Informe a UF da unidade (ex.: SP): ela define a jurisdição.');
-        unidadeId = core.salvarUnidade({ empresaId: fv(f, 'empresaId'), nome: fv(f, 'uNome'), endereco: fv(f, 'uEnd'), cidade: fv(f, 'uCid'), uf });
-      }
-      const uf = ufDaUnidade(); if (mod && uf && uf !== mod.jurisdicao.uf) throw new Error(`Modelo de ${mod.jurisdicao.uf} não pode ser usado em unidade de ${uf}.`);
-      const id = core.criarInspecao({ empresaId: fv(f, 'empresaId'), unidadeId, modeloId: fv(f, 'modeloId'), data: fv(f, 'data'), horaInicio: fv(f, 'horaInicio'), acompanhantes: fv(f, 'acompanhantes'), proposta: fv(f, 'proposta'), artNumero: fv(f, 'artNumero'), artData: fv(f, 'artData'), escopo: fv(f, 'escopo') });
-      m.fechar(); UI.inspId = id; UI.areaId = null; UI.tela = 'vistoria'; renderTela(); toast('Inspeção criada. Crie a primeira área visitada.', 'ok'); modalNovaArea();
-    });
+    m.querySelector('[data-ok]').onclick = () => {
+      const erro = e => { $('#ni-aviso', m).innerHTML = '<p class="msg-erro">' + esc(e.message) + '</p>'; };
+      try {
+        const empresaId = fv(f, 'empresaId');
+        if (!empresaId) throw new Error('Escolha o cliente (empresa) para criar a inspeção.');
+        const mod = core.modelo(fv(f, 'modeloId'));
+        if (!mod) throw new Error('Escolha o modelo de checklist.');
+        let unidadeId = sU.value;
+        if (novaUnidade()) {
+          const uf = ufDaUnidade();
+          unidadeId = core.salvarUnidade({ empresaId, nome: fv(f, 'uNome').trim() || 'Unidade principal', endereco: fv(f, 'uEnd'), cidade: fv(f, 'uCid'), uf: uf.length === 2 ? uf : '' });
+        }
+        const uf = ufDaUnidade(); if (mod && uf && uf.length === 2 && uf !== mod.jurisdicao.uf) throw new Error(`Modelo de ${mod.jurisdicao.uf} não pode ser usado em unidade de ${uf}. Escolha outro modelo ou corrija a UF.`);
+        const id = core.criarInspecao({ empresaId, unidadeId, modeloId: mod.id, data: fv(f, 'data') || hojeISO(), horaInicio: fv(f, 'horaInicio'), acompanhantes: fv(f, 'acompanhantes'), proposta: fv(f, 'proposta'), artNumero: fv(f, 'artNumero'), artData: fv(f, 'artData'), escopo: fv(f, 'escopo') });
+        m.fechar(); UI.inspId = id; UI.areaId = null; UI.tela = 'vistoria'; renderTela(); toast('Inspeção criada. Crie a primeira área visitada.', 'ok'); modalNovaArea();
+      } catch (e) { erro(e); }
+    };
   }
 
   /* =================================================================== */
