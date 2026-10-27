@@ -3416,17 +3416,22 @@ function criarRelatorios(core, evid) {
       <div id="bloco-nc"><h3>Ocorrências / não conformidades (${ocs.length})</h3>
       ${ed && core.can('nc.salvar') ? `<p class="peq">Toque na ocorrência encontrada (pode registrar várias no mesmo item):</p><div class="chips">${rapidas.map(t => `<button class="chip-btn" data-mi="nova-nc" data-tipo="${esc(t)}">+ ${esc(t)}</button>`).join('')}<button class="chip-btn" data-mi="nova-nc" data-tipo="">+ Outra</button></div>` : ''}
       ${ocs.map(o => cartaoNC(o, it, ed)).join('')}</div>
-      ${secaoComentarios(i, a, it, ed)}
+      <details class="mais"><summary>Comentários (${core.listarComentarios({ inspecaoId: i.id, areaId: a.id, itemId: it.id }).length})</summary>${secaoComentarios(i, a, it, ed)}</details>
       <details class="mais"${t.resultado !== 'nao_testado' ? ' open' : ''}><summary>Teste funcional: ${esc(TESTE[t.resultado])}</summary>
         <form class="grade g2" data-form-teste>${campo('Resultado', `<select name="resultado"${ed ? '' : ' disabled'}>${Object.entries(TESTE).map(([k, v]) => opt(k, v, t.resultado)).join('')}</select>`, { ajuda: 'Item não testado nunca recebe resultado funcional.' })}${campo('Amostragem', inp('amostragem', t.amostragem || '', { extra: ' placeholder="ex.: 3 de 12 luminárias"' }))}
         ${campo('Equipamento usado', inp('equipamento', t.equipamento || '', { extra: ' placeholder="ex.: luxímetro, manômetro"' }))}${campo('Medições', inp('medicoes', t.medicoes || ''))}
         ${campo('Procedimento executado', area('procedimento', t.procedimento || ''), { cls: 'span2', req: true })}${campo('Limitações', area('limitacoes', t.limitacoes || ''), { cls: 'span2', ajuda: 'O que o teste NÃO comprova.' })}
         ${ed ? '<div class="span2"><button type="button" class="btn" data-mi="salvar-teste">Salvar teste</button></div>' : ''}</form></details>`;
   }
+  /* Cartão da ocorrência: o essencial aparece já (tipo, foto, descartar). Os detalhes ficam recolhidos e opcionais na hora da inspeção. */
   function cartaoNC(o, it, ed) {
     const e = ed && o.situacao !== 'encerrada' && core.can('nc.salvar'); const dis = e ? '' : ' disabled';
     const fotos = core.listarFotos({ ocorrenciaId: o.id });
+    const faltam = [!o.prioridade && 'prioridade', !o.responsavel && 'responsável', !o.prazo && 'prazo'].filter(Boolean);
     return `<div class="cartao" data-nc="${o.id}"><div class="linha entre"><b>${esc(o.codigo)} ${esc(o.tipo)}</b><span class="chip ${o.situacao === 'encerrada' ? 'ok' : 'critico'}">${esc(SIT_NC[o.situacao])}</span></div>
+      ${e ? `<div class="foto-acoes"><button class="btn btn-primario" data-mi="foto-nc" data-oc="${o.id}">📷 Foto da não conformidade</button><button class="btn" data-mi="galeria-nc" data-oc="${o.id}">🖼 Da galeria</button></div>` : ''}
+      ${fotos.length ? gradeFotosUI(fotos) : ''}
+      <details class="mais"><summary>Detalhes da ocorrência ${faltam.length ? `· <span class="pend">falta ${faltam.join(', ')}</span>` : '· completos'}</summary>
       <div class="grade g2">${campo('Ocorrência (tipo)', `<input data-nc-c="tipo" value="${esc(o.tipo)}"${dis}>`)}${campo('Localização', `<input data-nc-c="localizacao" value="${esc(o.localizacao)}" placeholder="ex.: próximo à porta P2"${dis}>`)}
       ${campo('Descrição do que foi encontrado', `<textarea data-nc-c="descricao" rows="2"${dis}>${esc(o.descricao)}</textarea>`, { cls: 'span2' })}
       ${campo('Equipamento', `<input data-nc-c="equipamento" value="${esc(o.equipamento)}" placeholder="ex.: extintor E-07"${dis}>`)}${campo('Motivo', `<input data-nc-c="motivo" value="${esc(o.motivo)}"${dis}>`)}
@@ -3436,9 +3441,8 @@ function criarRelatorios(core, evid) {
       ${campo('Recomendação', `<textarea data-nc-c="recomendacao" rows="2"${dis}>${esc(o.recomendacao)}</textarea>`, { cls: 'span2' })}
       ${campo('Como comprovar a correção', `<input data-nc-c="comprovacao" value="${esc(o.comprovacao)}"${dis}>`, { cls: 'span2' })}
       ${campo('Responsável (quem)', `<input data-nc-c="responsavel" value="${esc(o.responsavel)}"${dis}>`)}${campo('Prazo (quando)', `<input type="date" data-nc-c="prazo" value="${esc(o.prazo)}"${dis}>`)}
-      ${campo('Como', `<input data-nc-c="como" value="${esc(o.como)}"${dis}>`)}${campo('Quanto', `<input data-nc-c="quanto" value="${esc(o.quanto)}" placeholder="custo estimado, se informado"${dis}>`)}</div>
-      <p class="peq">Fotos desta ocorrência: ${fotos.length}</p>${gradeFotosUI(fotos)}
-      ${e ? `<div class="foto-acoes"><button class="btn btn-sm" data-mi="foto-nc" data-oc="${o.id}">📷 Foto da ocorrência</button><button class="btn btn-sm" data-mi="galeria-nc" data-oc="${o.id}">🖼 Da galeria</button>${o.situacao === 'aberta' ? `<button class="btn btn-sm btn-perigo" data-mi="descartar-nc" data-oc="${o.id}">Descartar</button>` : ''}</div>` : ''}</div>`;
+      ${campo('Como', `<input data-nc-c="como" value="${esc(o.como)}"${dis}>`)}${campo('Quanto', `<input data-nc-c="quanto" value="${esc(o.quanto)}" placeholder="custo estimado, se informado"${dis}>`)}</div></details>
+      ${e && o.situacao === 'aberta' ? `<div class="foto-acoes"><button class="btn btn-sm btn-perigo" data-mi="descartar-nc" data-oc="${o.id}">Descartar</button></div>` : ''}</div>`;
   }
   function gradeFotosUI(fotos) {
     if (!fotos.length) return '<p class="muted peq">Nenhuma foto.</p>';
