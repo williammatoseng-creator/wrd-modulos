@@ -634,7 +634,7 @@ const WRDNuvem = (function () {
       const h = { apikey: CONFIG.chave, 'Content-Type': 'application/json' };
       if (autenticar) { await garantirToken(); h.Authorization = 'Bearer ' + sessao.access_token; }
       let r;
-      try { r = await f(CONFIG.url + caminho, Object.assign({ headers: h }, opc)); } catch (e) { throw erro('Sem conexão com a nuvem.', 'OFFLINE'); }
+      try { r = await f(CONFIG.url + caminho, Object.assign({}, opc, { headers: Object.assign({}, h, (opc && opc.headers) || {}) })); } catch (e) { throw erro('Sem conexão com a nuvem.', 'OFFLINE'); }
       const txt = await r.text(); let j = null; try { j = txt ? JSON.parse(txt) : null; } catch (e) { j = txt; }
       if (!r.ok) {
         const m = (j && (j.message || j.msg || j.error_description || j.error)) || ('HTTP ' + r.status);
@@ -666,6 +666,10 @@ const WRDNuvem = (function () {
       async ler() { const l = await http(`/rest/v1/estado_modulo?modulo=eq.${modulo}&select=dados,versao,atualizado_em,aparelho`, { method: 'GET' }, true); return l && l[0] ? l[0] : null; },
       async salvar(dados, versao, aparelho) { return http('/rest/v1/rpc/salvar_estado', { method: 'POST', body: JSON.stringify({ p_modulo: modulo, p_dados: dados, p_versao: versao, p_aparelho: aparelho || null }) }, true); },
       async uso() { return http('/rest/v1/rpc/uso_modulos', { method: 'POST', body: '{}' }, true); },
+      /** Demandas aprovadas no Comercial aguardando este módulo (tabela importacoes, status pendente). */
+      async pendencias() { return (await http(`/rest/v1/importacoes?modulo=eq.${modulo}&status=eq.pendente&select=*&order=criado_em.asc`, { method: 'GET' }, true)) || []; },
+      /** Marca a demanda como recebida por este módulo (o registro da fila permanece). */
+      async marcarRecebida(id) { return http(`/rest/v1/importacoes?id=eq.${encodeURIComponent(id)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ status: 'aceita', revisado_em: new Date().toISOString() }) }, true); },
       /** Envia um PDF ao bucket privado "documentos" (pasta do módulo). Devolve o caminho guardado no registro. */
       async enviarPdf(blob) {
         await garantirToken();
@@ -976,7 +980,7 @@ const WRDNuvem = (function () {
       catch (er) { if (janela) janela.close(); o.toast(er.message, 'erro'); }
     });
 
-    return { disponivel, abrir, parar, telaHTML, botaoTopo, abaConfig, posRender, usuarioEmail: () => (cli && cli.usuario() ? cli.usuario().email : null), publicarEvento: (tipo, id, payload) => (cli && cli.conectado() ? cli.publicarEvento(tipo, id, payload) : Promise.resolve(null)), ativo: () => !!sync, situacao: () => (sync ? sync.situacao() : null), anexoHTML, pdfNaNuvem, anexarLote };
+    return { disponivel, abrir, parar, telaHTML, botaoTopo, pendencias: () => (cli && cli.conectado() ? cli.pendencias() : Promise.resolve([])), marcarRecebida: id => cli.marcarRecebida(id), abaConfig, posRender, usuarioEmail: () => (cli && cli.usuario() ? cli.usuario().email : null), publicarEvento: (tipo, id, payload) => (cli && cli.conectado() ? cli.publicarEvento(tipo, id, payload) : Promise.resolve(null)), ativo: () => !!sync, situacao: () => (sync ? sync.situacao() : null), anexoHTML, pdfNaNuvem, anexarLote };
   }
 
   return { CONFIG, cliente, sincronizador, mesclar, integrar, MSG };

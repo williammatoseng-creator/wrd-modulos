@@ -631,7 +631,7 @@ const WRDNuvem = (function () {
       const h = { apikey: CONFIG.chave, 'Content-Type': 'application/json' };
       if (autenticar) { await garantirToken(); h.Authorization = 'Bearer ' + sessao.access_token; }
       let r;
-      try { r = await f(CONFIG.url + caminho, Object.assign({ headers: h }, opc)); } catch (e) { throw erro('Sem conexão com a nuvem.', 'OFFLINE'); }
+      try { r = await f(CONFIG.url + caminho, Object.assign({}, opc, { headers: Object.assign({}, h, (opc && opc.headers) || {}) })); } catch (e) { throw erro('Sem conexão com a nuvem.', 'OFFLINE'); }
       const txt = await r.text(); let j = null; try { j = txt ? JSON.parse(txt) : null; } catch (e) { j = txt; }
       if (!r.ok) {
         const m = (j && (j.message || j.msg || j.error_description || j.error)) || ('HTTP ' + r.status);
@@ -663,6 +663,10 @@ const WRDNuvem = (function () {
       async ler() { const l = await http(`/rest/v1/estado_modulo?modulo=eq.${modulo}&select=dados,versao,atualizado_em,aparelho`, { method: 'GET' }, true); return l && l[0] ? l[0] : null; },
       async salvar(dados, versao, aparelho) { return http('/rest/v1/rpc/salvar_estado', { method: 'POST', body: JSON.stringify({ p_modulo: modulo, p_dados: dados, p_versao: versao, p_aparelho: aparelho || null }) }, true); },
       async uso() { return http('/rest/v1/rpc/uso_modulos', { method: 'POST', body: '{}' }, true); },
+      /** Demandas aprovadas no Comercial aguardando este módulo (tabela importacoes, status pendente). */
+      async pendencias() { return (await http(`/rest/v1/importacoes?modulo=eq.${modulo}&status=eq.pendente&select=*&order=criado_em.asc`, { method: 'GET' }, true)) || []; },
+      /** Marca a demanda como recebida por este módulo (o registro da fila permanece). */
+      async marcarRecebida(id) { return http(`/rest/v1/importacoes?id=eq.${encodeURIComponent(id)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ status: 'aceita', revisado_em: new Date().toISOString() }) }, true); },
       /** Envia um PDF ao bucket privado "documentos" (pasta do módulo). Devolve o caminho guardado no registro. */
       async enviarPdf(blob) {
         await garantirToken();
@@ -973,7 +977,7 @@ const WRDNuvem = (function () {
       catch (er) { if (janela) janela.close(); o.toast(er.message, 'erro'); }
     });
 
-    return { disponivel, abrir, parar, telaHTML, botaoTopo, abaConfig, posRender, usuarioEmail: () => (cli && cli.usuario() ? cli.usuario().email : null), publicarEvento: (tipo, id, payload) => (cli && cli.conectado() ? cli.publicarEvento(tipo, id, payload) : Promise.resolve(null)), ativo: () => !!sync, situacao: () => (sync ? sync.situacao() : null), anexoHTML, pdfNaNuvem, anexarLote };
+    return { disponivel, abrir, parar, telaHTML, botaoTopo, pendencias: () => (cli && cli.conectado() ? cli.pendencias() : Promise.resolve([])), marcarRecebida: id => cli.marcarRecebida(id), abaConfig, posRender, usuarioEmail: () => (cli && cli.usuario() ? cli.usuario().email : null), publicarEvento: (tipo, id, payload) => (cli && cli.conectado() ? cli.publicarEvento(tipo, id, payload) : Promise.resolve(null)), ativo: () => !!sync, situacao: () => (sync ? sync.situacao() : null), anexoHTML, pdfNaNuvem, anexarLote };
   }
 
   return { CONFIG, cliente, sincronizador, mesclar, integrar, MSG };
@@ -2713,13 +2717,37 @@ const WRDOps = (function () {
       return mutate(() => { state = s; log({ acao: 'backup.importado', entidade: 'backup', detalhe: 'Dados substituídos por importação de backup.' }); });
     }
 
+    /** Demanda aprovada no Comercial (fila da nuvem): cria cliente, unidade e serviço na Operação. Não duplica: a referência "COM <código>" fica no serviço. */
+    function receberDemanda(item) {
+      guard('servico.salvar');
+      const codigo = txt(item.codigo_oportunidade);
+      if (!codigo) fail('Demanda sem código do Comercial.');
+      const ref = 'COM ' + codigo;
+      const ja = state.servicos.find(s => s.referencia === ref);
+      if (ja) return { id: ja.id, jaRecebida: true };
+      const razao = txt(item.cliente_nome);
+      if (!razao) fail('Demanda sem nome do cliente.');
+      if (!state.clientes.some(x => norm(x.razaoSocial) === norm(razao))) salvarCliente({ razaoSocial: razao }, { confirmar: true });
+      const cli = state.clientes.find(x => norm(x.razaoSocial) === norm(razao));
+      const nomeUni = txt(item.unidade_nome);
+      if (!nomeUni) fail('Demanda sem nome da unidade.');
+      if (!state.unidades.some(u => u.clienteId === cli.id && norm(u.nome) === norm(nomeUni))) salvarUnidade({ clienteId: cli.id, nome: nomeUni, endereco: txt(item.unidade_endereco), cidade: txt(item.unidade_cidade), uf: txt(item.unidade_uf) });
+      const uni = state.unidades.find(u => u.clienteId === cli.id && norm(u.nome) === norm(nomeUni));
+      const nomeTipo = txt(item.servico_nome) || 'Serviço do Comercial';
+      if (!state.tipos.some(t => norm(t.nome) === norm(nomeTipo))) salvarTipo({ macro: 'Comercial', nome: nomeTipo });
+      const tipo = state.tipos.find(t => norm(t.nome) === norm(nomeTipo));
+      const valor = Number(item.valor_aprovado != null ? item.valor_aprovado : item.valor) || 0;
+      salvarServico({ clienteId: cli.id, unidadeId: uni.id, titulo: nomeTipo + ' — ' + nomeUni, tipoId: tipo.id, descricao: 'Demanda aprovada no Comercial (' + codigo + ').', responsavelId: user().userId, prioridade: 'media', dataEntrada: txt(item.data_venda) || hoje(), pedido: txt(item.pedido), referencia: ref, obsInternas: 'Valor aprovado: ' + Money.fmt(valor) + ' · pedido ' + txt(item.pedido) + ' (ME ' + txt(item.pedido_me) + ')', infoCliente: 'Contato: ' + txt(item.contato_nome) + ' · ' + txt(item.contato_email) });
+      const criado = state.servicos.find(s => s.referencia === ref);
+      return { id: criado ? criado.id : null, jaRecebida: false };
+    }
     return {
       MODULO_ID, SCHEMA_VERSION, demo, ETAPAS, CONDICOES, PRIORIDADES, SIT_ATIV, SIT_PEND, PEND_ABERTAS, RESPONSABILIDADE, SIT_ACAO, VISIBILIDADE, PERFIS, CAMPOS_PEND, CAMPOS_PADRAO, CAMPOS_DATA,
       Dates, Money, hoje, dataLocal, on,
       hasUsers, setupAdmin, login, logout, usuariosDemo, entrarDemo, entrarPelaNuvem, user, can, listarUsuarios, salvarUsuario, alterarSenha, equipe,
       config, salvarConfig, tipos, salvarTipo,
       salvarCliente, salvarUnidade, arquivar, clientes, unidades,
-      salvarServico, moverEtapa, definirCondicao, registrarAceite, listarServicos, servicoDetalhe,
+      salvarServico, receberDemanda, moverEtapa, definirCondicao, registrarAceite, listarServicos, servicoDetalhe,
       salvarAtividade, comentar, listarAtividades,
       salvarPendencia, resolverPendencia, cancelarPendencia, reabrirPendencia, listarPendencias,
       rascunhoAcaoDePendencia, salvarAcao, listarAcoes, impactoDatas, alterarDatas,
@@ -3202,7 +3230,27 @@ if (typeof module !== 'undefined') module.exports = WRDDemo;
   /* =================================================================== */
   /* VISÃO GERAL                                                          */
   /* =================================================================== */
+  /* ---------- demandas aprovadas no Comercial (fila da nuvem) ---------- */
+  const DEMANDAS = new Map();
+  async function carregarDemandas() {
+    const box = document.getElementById('demandas-comercial'); if (!box) return;
+    if (!NV || !NV.ativo()) { box.innerHTML = '<h2>Demandas aprovadas no Comercial</h2><p class="ajuda">Conecte a nuvem (Configurações › Nuvem e aparelhos) para ver as demandas aprovadas.</p>'; return; }
+    try {
+      const lista = await NV.pendencias();
+      DEMANDAS.clear(); lista.forEach(i => DEMANDAS.set(i.id, i));
+      const linhas = lista.map(i => `<tr><td class="nowrap"><b>${esc(i.dados.codigo_oportunidade)}</b></td><td>${esc(i.dados.cliente_nome)} · ${esc(i.dados.unidade_nome)}</td><td>${esc(i.dados.servico_nome)}</td><td class="num">${M.fmt(Number(i.dados.valor_aprovado))}</td><td>${esc(i.dados.pedido)}</td><td class="acoes"><button class="btn btn-sm btn-primario" data-act="receber-demanda" data-id="${esc(i.id)}">Receber na Operação</button></td></tr>`).join('');
+      box.innerHTML = `<h2>Demandas aprovadas no Comercial <span class="chip-n">${lista.length}</span></h2>` + (lista.length ? `<div class="tabela-wrap"><table class="tab"><thead><tr><th>Código</th><th>Cliente · unidade</th><th>Serviço</th><th class="num">Valor aprovado</th><th>Pedido</th><th></th></tr></thead><tbody>${linhas}</tbody></table></div>` : '<p class="ajuda">Nenhuma demanda aguardando.</p>');
+    } catch (e) { box.innerHTML = `<h2>Demandas aprovadas no Comercial</h2><p class="ajuda">Não foi possível ler as demandas: ${esc(e.message)}</p>`; }
+  }
+  async function receberDemandaUI(id) {
+    const i = DEMANDAS.get(id); if (!i) { toast('Demanda não encontrada. Atualize a tela.', 'erro'); return; }
+    const r = await executar(() => core.receberDemanda(Object.assign({ origem_ref: i.origem_ref }, i.dados)), {}, 'Demanda recebida na Operação.');
+    if (!r.ok) return;
+    try { await NV.marcarRecebida(id); } catch (e) { toast('Serviço criado, mas a nuvem não confirmou o recebimento: ' + e.message, 'erro'); }
+    carregarDemandas();
+  }
   function telaVisao(el) {
+    setTimeout(carregarDemandas, 0);
     const h = core.hoje();
     UI.periodo = UI.periodo || { de: D.inicioMes(h), ate: D.fimMes(h) };
     const ind = core.indicadores(UI.periodo, {});
@@ -3218,7 +3266,7 @@ if (typeof module !== 'undefined') module.exports = WRDDemo;
     const urgentes = core.listarPendencias({ situacao: 'abertas', vencidas: true }).slice(0, 8);
     const servAtencao = core.listarServicos({ etapa: 'ativos' }).filter(s => s.atrasado || s.condicao !== 'regular').slice(0, 8);
     const rapidas = [core.can('pendencia.salvar') ? '<button class="btn btn-primario" data-act="nova-pendencia">+ Pendência</button>' : '', core.can('atividade.salvar') ? '<button class="btn" data-act="nova-atividade">+ Atividade</button>' : '', core.can('servico.salvar') ? '<button class="btn" data-act="novo-servico">+ Serviço</button>' : '', core.can('acao.salvar') ? '<button class="btn" data-act="nova-acao">+ Ação 5W2H</button>' : ''].join('');
-    el.innerHTML = `<div class="acoes-rapidas linha" aria-label="Ações rápidas">${rapidas}</div><div class="cab-tela"><h1>Visão geral</h1>
+    el.innerHTML = `<div class="acoes-rapidas linha" aria-label="Ações rápidas">${rapidas}</div><div class="cab-tela"><h1>Visão geral</h1><div id="demandas-comercial" class="cartao"></div>
       <form class="linha periodo-vg" id="f-periodo"><label class="campo-inline">De <input type="date" name="de" value="${UI.periodo.de}"></label><label class="campo-inline">Até <input type="date" name="ate" value="${UI.periodo.ate}"></label>
       <button type="button" class="btn btn-sm" data-act="per-mes">Mês atual</button></form></div>
       <p class="ajuda">Indicadores calculados com os mesmos critérios das listas e relatórios. Clique em um indicador ou barra para abrir os registros de origem. Passe o mouse para ver a fórmula.</p>
@@ -4038,6 +4086,7 @@ if (typeof module !== 'undefined') module.exports = WRDDemo;
       case 'remover-salvo': { const s = $('[data-act-sel="aplicar-salvo"]'); if (!s || !s.value) { toast('Escolha o filtro salvo na lista.', 'info'); break; } await executar(() => core.removerFiltro(s.value), {}, 'Filtro excluído.'); refresh(); break; }
       case 'novo-servico': formServico(null, a.dataset.cliente ? { clienteId: a.dataset.cliente } : null); break;
       case 'anexar-lote': document.querySelectorAll('.modal-fundo').forEach(x => x.remove()); anexarPdfsLote(); break;
+      case 'receber-demanda': receberDemandaUI(id); break;
       case 'editar-servico': formServico(core.servicoDetalhe(id)); break;
       case 'condicao': mudarCondicao(id); break;
       case 'aceite': registrarAceite(id); break;
