@@ -3242,7 +3242,8 @@ function criarRelatorios(core, evid) {
     const agora = new Date().toTimeString().slice(0, 5);
     const m = modal('Nova inspeção', `<form id="f-ni" class="grade g2">
       ${campo('Cliente (empresa)', `<select name="empresaId" required>${opt('', 'Escolha…')}${emps.map(e => opt(e.id, e.nome)).join('')}</select>`, { req: true })}
-      ${campo('Unidade', '<select name="unidadeId" required disabled><option value="">Escolha o cliente</option></select>', { req: true })}
+      ${campo('Unidade', '<select name="unidadeId" required disabled><option value="">Escolha o cliente</option></select>', { req: true, ajuda: 'Sem unidade cadastrada? Preencha os dados abaixo: ela é criada junto com a inspeção.' })}
+      <div class="span2" id="ni-unidade-nova"><div class="grade g2">${inp('uNome', '', { extra: ' placeholder="ex.: Loja Centro"' })}${inp('uUf', '', { extra: ' placeholder="SP" maxlength="2"' })}${inp('uEnd', '', { extra: ' placeholder="Rua, número"' })}${inp('uCid', '', { extra: ' placeholder="Cidade"' })}</div></div>
       ${campo('Modelo de checklist (versão publicada)', `<select name="modeloId" required>${mods.map(x => opt(x.id, `${x.nome} — v${x.versao}${x.revisaoRT ? '' : ' (revisão do RT pendente)'}`)).join('')}</select>`, { req: true, cls: 'span2', ajuda: 'A inspeção congela a versão escolhida; mudanças posteriores no modelo não a afetam.' })}
       ${campo('Data', inp('data', hojeISO(), { type: 'date', req: true }), { req: true })}${campo('Hora de início', inp('horaInicio', agora, { type: 'time' }))}
       ${campo('Acompanhantes', inp('acompanhantes', ''), { cls: 'span2', ajuda: 'Nome e função de quem acompanhou.' })}
@@ -3251,14 +3252,23 @@ function criarRelatorios(core, evid) {
       ${campo('Escopo da inspeção', area('escopo', ''), { cls: 'span2' })}
       <div class="span2" id="ni-aviso"></div></form>`, { rodape: '<button class="btn" data-fechar2>Cancelar</button><button class="btn btn-primario" data-ok>Criar e começar a vistoria</button>' });
     const f = $('#f-ni', m), sU = f.querySelector('[name=unidadeId]');
-    const conferir = () => { const u = core.unidade(sU.value), mod = core.modelo(fv(f, 'modeloId')); $('#ni-aviso', m).innerHTML = u && mod && u.uf && u.uf !== mod.jurisdicao.uf ? `<p class="msg-erro">A unidade fica em ${esc(u.uf)} e o modelo é de ${esc(mod.jurisdicao.uf)}. Requisito de incêndio é estadual: crie ou use um modelo da jurisdição ${esc(u.uf)}.</p>` : u && !u.uf ? '<p class="msg-aviso">A unidade está sem UF cadastrada: confira a jurisdição antes de usar o modelo.</p>' : ''; };
-    f.querySelector('[name=empresaId]').onchange = e => { const us = core.listarUnidades(e.target.value); sU.disabled = !us.length; sU.innerHTML = us.length ? us.map(u => opt(u.id, `${u.nome}${u.uf ? ' — ' + u.uf : ''}`)).join('') : '<option value="">Sem unidades: cadastre em Clientes</option>'; conferir(); };
-    sU.onchange = conferir; f.querySelector('[name=modeloId]').onchange = conferir;
+    const novaUnidade = () => !sU.value || sU.disabled;
+    const ufDaUnidade = () => novaUnidade() ? String(fv(f, 'uUf')).trim().toUpperCase() : (core.unidade(sU.value) || {}).uf;
+    const conferir = () => { const uf = ufDaUnidade(), mod = core.modelo(fv(f, 'modeloId')); const bloco = $('#ni-unidade-nova', m); if (bloco) bloco.style.display = novaUnidade() ? '' : 'none'; $('#ni-aviso', m).innerHTML = uf && mod && uf !== mod.jurisdicao.uf ? `<p class="msg-erro">A unidade fica em ${esc(uf)} e o modelo é de ${esc(mod.jurisdicao.uf)}. Requisito de incêndio é estadual: use um modelo da jurisdição ${esc(uf)}.</p>` : ''; };
+    f.querySelector('[name=empresaId]').onchange = e => { const us = core.listarUnidades(e.target.value); sU.disabled = !us.length; sU.innerHTML = us.length ? us.map(u => opt(u.id, `${u.nome}${u.uf ? ' — ' + u.uf : ''}`)).join('') : '<option value="">Sem unidade cadastrada</option>'; conferir(); };
+    sU.onchange = conferir; f.querySelector('[name=uUf]').oninput = conferir;
+    f.querySelector('[name=modeloId]').onchange = conferir; conferir();
     m.querySelector('[data-fechar2]').onclick = () => m.fechar();
     m.querySelector('[data-ok]').onclick = () => tentar(() => {
-      const u = core.unidade(sU.value), mod = core.modelo(fv(f, 'modeloId'));
-      if (u && mod && u.uf && u.uf !== mod.jurisdicao.uf) throw new Error(`Modelo de ${mod.jurisdicao.uf} não pode ser usado em unidade de ${u.uf}.`);
-      const id = core.criarInspecao({ empresaId: fv(f, 'empresaId'), unidadeId: sU.value, modeloId: fv(f, 'modeloId'), data: fv(f, 'data'), horaInicio: fv(f, 'horaInicio'), acompanhantes: fv(f, 'acompanhantes'), proposta: fv(f, 'proposta'), artNumero: fv(f, 'artNumero'), artData: fv(f, 'artData'), escopo: fv(f, 'escopo') });
+      const mod = core.modelo(fv(f, 'modeloId'));
+      let unidadeId = sU.value;
+      if (novaUnidade()) {
+        if (!fv(f, 'uNome').trim()) throw new Error('Informe o nome da unidade.');
+        const uf = ufDaUnidade(); if (!/^[A-Z]{2}$/.test(uf)) throw new Error('Informe a UF da unidade (ex.: SP): ela define a jurisdição.');
+        unidadeId = core.salvarUnidade({ empresaId: fv(f, 'empresaId'), nome: fv(f, 'uNome'), endereco: fv(f, 'uEnd'), cidade: fv(f, 'uCid'), uf });
+      }
+      const uf = ufDaUnidade(); if (mod && uf && uf !== mod.jurisdicao.uf) throw new Error(`Modelo de ${mod.jurisdicao.uf} não pode ser usado em unidade de ${uf}.`);
+      const id = core.criarInspecao({ empresaId: fv(f, 'empresaId'), unidadeId, modeloId: fv(f, 'modeloId'), data: fv(f, 'data'), horaInicio: fv(f, 'horaInicio'), acompanhantes: fv(f, 'acompanhantes'), proposta: fv(f, 'proposta'), artNumero: fv(f, 'artNumero'), artData: fv(f, 'artData'), escopo: fv(f, 'escopo') });
       m.fechar(); UI.inspId = id; UI.areaId = null; UI.tela = 'vistoria'; renderTela(); toast('Inspeção criada. Crie a primeira área visitada.', 'ok'); modalNovaArea();
     });
   }
