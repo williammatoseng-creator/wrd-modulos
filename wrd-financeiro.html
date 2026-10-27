@@ -31,6 +31,7 @@ const MANIFEST = {
     "financeiro.baixa.registrada", "financeiro.baixa.estornada",
     "financeiro.transferencia.criada", "financeiro.transferencia.estornada",
     "financeiro.socio.registrado", "financeiro.socio.estornado",
+    "financeiro.transferencia.editada", "financeiro.socio.editado",
     "financeiro.pessoa.salva", "financeiro.projeto.salvo", "financeiro.dados.importados"
   ],
   eventos_consumidos: [],
@@ -1110,7 +1111,7 @@ const WRDCore = (function () {
     operador: {
       rotulo: 'Operador',
       acoes: ['ler', 'exportar', 'relatorio.emitir', 'senha.propria', 'titulo.criar', 'titulo.editar', 'titulo.cancelar',
-        'baixa.registrar', 'pessoa.salvar', 'projeto.salvar', 'transferencia.criar', 'socio.criar']
+        'baixa.registrar', 'pessoa.salvar', 'projeto.salvar', 'transferencia.criar', 'transferencia.editar', 'socio.criar', 'socio.editar']
     },
     consulta: { rotulo: 'Consulta', acoes: ['ler', 'exportar', 'relatorio.emitir', 'senha.propria'] }
   };
@@ -1900,6 +1901,67 @@ const WRDCore = (function () {
         return Object.assign({}, m);
       });
     }
+    /* Correção de lançamento: altera o registro, guarda cada alteração (de → para) e grava no histórico. O original não some. */
+    function diferencas(antes, depois, campos, rotulos) {
+      return campos.filter(c => String(antes[c] == null ? '' : antes[c]) !== String(depois[c] == null ? '' : depois[c]))
+        .map(c => ({ campo: rotulos[c], de: antes[c] == null ? '' : antes[c], para: depois[c] == null ? '' : depois[c] }));
+    }
+    function anotarEdicao(reg, mudancas, motivo) {
+      reg.edicoes = (reg.edicoes || []).concat([{ ts: nowISO(), usuario: user().login, motivo: motivo, mudancas }]);
+      reg.editadoEm = nowISO(); reg.editadoPor = user().login; reg.updatedAt = nowISO();
+    }
+    function resumoMudancas(mudancas) { return mudancas.map(m => `${m.campo}: ${m.de === '' ? '—' : m.de} → ${m.para === '' ? '—' : m.para}`).join('; '); }
+    function editarTransferencia(id, d) {
+      guard('transferencia.editar');
+      const tr = byId('transferencias', id);
+      if (!tr) fail('Transferência não encontrada.');
+      if (tr.estornada) fail('Transferência estornada não pode ser editada.');
+      const motivo = String(d.motivo || '').trim();
+      if (motivo.length < 5) fail('Explique o motivo da correção.', 'JUSTIFICATIVA');
+      const o = byId('contas', d.origemId), de = byId('contas', d.destinoId);
+      if (!o || !de) fail('Informe as contas de origem e destino.');
+      if (o.id === de.id) fail('Origem e destino devem ser contas diferentes.');
+      if (!o.ativa || !de.ativa) fail('Não é possível transferir com conta inativa.');
+      if (!Number.isInteger(d.valor) || d.valor <= 0) fail('Informe um valor maior que zero.');
+      validarDataMovimento(d.data, o); validarDataMovimento(d.data, de);
+      const novo = { origemId: o.id, destinoId: de.id, valor: d.valor, data: d.data, descricao: String(d.descricao || '').trim() || 'Transferência entre contas' };
+      const rot = { origemId: 'Conta de origem', destinoId: 'Conta de destino', valor: 'Valor', data: 'Data', descricao: 'Descrição' };
+      const mudancas = diferencas(tr, novo, Object.keys(rot), rot).map(m => ({ campo: m.campo, de: m.campo === 'Conta de origem' ? (byId('contas', tr.origemId) || {}).nome : m.campo === 'Conta de destino' ? (byId('contas', tr.destinoId) || {}).nome : m.de, para: m.campo === 'Conta de origem' ? o.nome : m.campo === 'Conta de destino' ? de.nome : m.para }));
+      if (!mudancas.length) fail('Nenhuma alteração para salvar.');
+      return mutate(() => {
+        Object.assign(tr, novo);
+        anotarEdicao(tr, mudancas, motivo);
+        log('transferencia.editada', 'transferencia', tr.id, `Correção da transferência: ${resumoMudancas(mudancas)}. Motivo: ${motivo}.`);
+        queue('financeiro.transferencia.editada', { id: tr.id });
+        return Object.assign({}, tr);
+      });
+    }
+    function editarMovSocio(id, d) {
+      guard('socio.editar');
+      const m = byId('movimentosSocios', id);
+      if (!m) fail('Movimento não encontrado.');
+      if (m.estornado) fail('Movimento estornado não pode ser editado.');
+      const motivo = String(d.motivo || '').trim();
+      if (motivo.length < 5) fail('Explique o motivo da correção.', 'JUSTIFICATIVA');
+      if (!['aporte', 'retirada'].includes(d.tipo)) fail('Informe se é aporte ou retirada.');
+      const c = byId('contas', d.contaId);
+      if (!c) fail('Informe a conta.');
+      if (!c.ativa) fail('A conta selecionada está inativa.');
+      if (!Number.isInteger(d.valor) || d.valor <= 0) fail('Informe um valor maior que zero.');
+      validarDataMovimento(d.data, c);
+      const novo = { tipo: d.tipo, contaId: c.id, valor: d.valor, data: d.data, socio: String(d.socio || '').trim(), descricao: String(d.descricao || '').trim() };
+      const rot = { tipo: 'Tipo', contaId: 'Conta', valor: 'Valor', data: 'Data', socio: 'Sócio', descricao: 'Descrição' };
+      const nomeConta = id => (byId('contas', id) || {}).nome || '';
+      const mudancas = diferencas(m, novo, Object.keys(rot), rot).map(x => ({ campo: x.campo, de: x.campo === 'Conta' ? nomeConta(m.contaId) : x.campo === 'Tipo' ? (x.de === 'aporte' ? 'Aporte' : 'Retirada') : x.de, para: x.campo === 'Conta' ? c.nome : x.campo === 'Tipo' ? (x.para === 'aporte' ? 'Aporte' : 'Retirada') : x.para }));
+      if (!mudancas.length) fail('Nenhuma alteração para salvar.');
+      return mutate(() => {
+        Object.assign(m, novo);
+        anotarEdicao(m, mudancas, motivo);
+        log('socio.editado', 'socio', m.id, `Correção de ${m.tipo === 'aporte' ? 'aporte' : 'retirada'}${m.socio ? ' (' + m.socio + ')' : ''}: ${resumoMudancas(mudancas)}. Motivo: ${motivo}.`);
+        queue('financeiro.socio.editado', { id: m.id });
+        return Object.assign({}, m);
+      });
+    }
 
     /* ---------- leitura e cálculos ---------- */
     function enriquecer(t) {
@@ -2264,7 +2326,7 @@ const WRDCore = (function () {
       salvarConfig, config, emitirNumeroRelatorio,
       salvarPessoa, salvarProjeto, salvarCategoria, salvarConta,
       criarTitulo, receberDemandaComercial, editarTitulo, cancelarTitulo, registrarBaixa, estornarBaixa,
-      criarTransferencia, estornarTransferencia, criarMovSocio, estornarMovSocio,
+      criarTransferencia, estornarTransferencia, editarTransferencia, criarMovSocio, estornarMovSocio, editarMovSocio,
       lista, get, titulo, listarTitulos, baixasDoTitulo, serieDe, movimentos, saldoConta: (id, ate) => { guard('ler'); return saldoConta(id, ate); }, saldos,
       kpis, projecao, fluxoMensal, porCategoria, resultadoDireto, inadimplencia, resumoMensal, historico,
       snapshot, importarJSON, apagarTudo, acrescentarAnexosTitulo
@@ -3055,7 +3117,7 @@ const WRDCore = (function () {
         ${movs.map(m => { if (f.contaId && !m.estornado) saldoCorrente += m.entrada - m.saida; return `<tr class="${m.estornado ? 'riscado' : ''} ${m.tituloId ? 'clicavel' : ''}" ${m.tituloId ? `data-act="detalhe" data-id="${m.tituloId}"` : ''}>
           <td data-l="Data">${D(m.data)}</td><td data-l="Conta">${esc(m.contaNome)}</td><td data-l="Tipo">${rotTipo[m.tipo]}${m.estornado ? ' <span class="st st-estornado">estornado</span>' : ''}</td><td data-l="Descrição">${esc(m.descricao)}</td>
           <td data-l="Entrada" class="num">${m.entrada ? R(m.entrada) : ''}</td><td data-l="Saída" class="num">${m.saida ? R(m.saida) : ''}</td>${f.contaId ? `<td data-l="Saldo" class="num">${m.estornado ? '' : R(saldoCorrente)}</td>` : ''}
-          <td class="acoes no-print">${!m.estornado && m.ref === 'transferencia' && core.can('transferencia.estornar') && (!f.contaId ? m.saida : true) ? `<button class="btn btn-sm btn-perigo" data-act="estornar-transf" data-id="${m.id}">Estornar</button>` : ''}${!m.estornado && m.ref === 'socio' && core.can('socio.estornar') ? `<button class="btn btn-sm btn-perigo" data-act="estornar-socio" data-id="${m.id}">Estornar</button>` : ''}</td></tr>`; }).join('') || `<tr><td colspan="8" class="vazio">Nenhuma movimentação realizada no período.</td></tr>`}
+          <td class="acoes no-print">${!m.estornado && m.ref === 'transferencia' && core.can('transferencia.editar') ? `<button class="btn btn-sm" data-act="editar-transf" data-id="${m.id}">Editar</button>` : ''}${!m.estornado && m.ref === 'socio' && core.can('socio.editar') ? `<button class="btn btn-sm" data-act="editar-socio" data-id="${m.id}">Editar</button>` : ''}${!m.estornado && m.ref === 'transferencia' && core.can('transferencia.estornar') && (!f.contaId ? m.saida : true) ? `<button class="btn btn-sm btn-perigo" data-act="estornar-transf" data-id="${m.id}">Estornar</button>` : ''}${!m.estornado && m.ref === 'socio' && core.can('socio.estornar') ? `<button class="btn btn-sm btn-perigo" data-act="estornar-socio" data-id="${m.id}">Estornar</button>` : ''}</td></tr>`; }).join('') || `<tr><td colspan="8" class="vazio">Nenhuma movimentação realizada no período.</td></tr>`}
         </tbody>${movs.length ? `<tfoot><tr><td colspan="4" data-l="Totais">Totais (sem estornados)${!f.contaId && !f.tipo ? ' — transferências se anulam no consolidado' : ''}</td><td data-l="Entradas" class="num">${R(totE)}</td><td data-l="Saídas" class="num">${R(totS)}</td>${f.contaId ? `<td data-l="Saldo final" class="num">${R(saldoCorrente)}</td>` : ''}<td></td></tr></tfoot>` : ''}</table></div>
       </section>
       <section class="cartao" id="sec-projecao"><div class="cab"><h2>Saldo projetado <span class="etq etq-previsto">Previsto</span></h2>
@@ -3112,39 +3174,43 @@ const WRDCore = (function () {
       fecharModal(m); renderAba();
     });
   }
-  function formTransferencia() {
+  function formTransferencia(tr) {
     const m = abrirModal({
-      titulo: 'Transferência entre contas próprias', tamanho: 'estreito',
-      corpo: `<div class="aviso aviso-info">Movimenta os saldos das duas contas sem gerar receita nem despesa.</div><form id="form-trf" class="grade" novalidate>
-        <label class="campo"><span>De (origem) <span class="req">*</span></span><select name="origemId">${opcoesContas('', 'Selecione...')}</select></label>
-        <label class="campo"><span>Para (destino) <span class="req">*</span></span><select name="destinoId">${opcoesContas('', 'Selecione...')}</select></label>
-        <label class="campo"><span>Valor <span class="req">*</span></span>${moedaInput('valor', '')}</label>
-        <label class="campo"><span>Data <span class="req">*</span></span><input type="date" name="data" value="${hojeISO()}" max="${hojeISO()}"></label>
-        <label class="campo">Descrição<input type="text" name="descricao" maxlength="120" placeholder="Transferência entre contas"></label>
+      titulo: tr ? 'Corrigir transferência' : 'Transferência entre contas próprias', tamanho: 'estreito',
+      corpo: `<div class="aviso aviso-info">${tr ? 'A correção fica registrada no histórico, com o valor anterior e o motivo.' : 'Movimenta os saldos das duas contas sem gerar receita nem despesa.'}</div><form id="form-trf" class="grade" novalidate>
+        <label class="campo"><span>De (origem) <span class="req">*</span></span><select name="origemId">${opcoesContas(tr ? tr.origemId : '', 'Selecione...')}</select></label>
+        <label class="campo"><span>Para (destino) <span class="req">*</span></span><select name="destinoId">${opcoesContas(tr ? tr.destinoId : '', 'Selecione...')}</select></label>
+        <label class="campo"><span>Valor <span class="req">*</span></span>${moedaInput('valor', tr ? tr.valor : '')}</label>
+        <label class="campo"><span>Data <span class="req">*</span></span><input type="date" name="data" value="${tr ? tr.data : hojeISO()}" max="${hojeISO()}"></label>
+        <label class="campo">Descrição<input type="text" name="descricao" maxlength="120" placeholder="Transferência entre contas" value="${esc(tr ? tr.descricao : '')}"></label>
+        ${tr ? '<label class="campo"><span>Motivo da correção <span class="req">*</span></span><input type="text" name="motivo" maxlength="200" placeholder="Ex.: valor digitado errado"></label>' : ''}
         <div class="erro-form" id="trf-erro"></div></form>`,
-      rodape: `<button class="btn" data-fechar>Cancelar</button><button class="btn btn-primario" id="salvar-trf">Transferir</button>`
+      rodape: `<button class="btn" data-fechar>Cancelar</button><button class="btn btn-primario" id="salvar-trf">${tr ? 'Salvar correção' : 'Transferir'}</button>`
     });
     $('#salvar-trf', m).addEventListener('click', async () => {
-      const res = await executar(() => core.criarTransferencia(lerForm($('#form-trf', m))), 'Transferência registrada.');
+      const d = lerForm($('#form-trf', m));
+      const res = tr ? await executar(() => core.editarTransferencia(tr.id, d), 'Transferência corrigida.') : await executar(() => core.criarTransferencia(d), 'Transferência registrada.');
       if (!res.ok) return mostrarErro(res, $('#trf-erro', m));
       fecharModal(m); renderAba();
     });
   }
-  function formSocio() {
+  function formSocio(mv) {
     const m = abrirModal({
-      titulo: 'Aporte ou retirada de sócio', tamanho: 'estreito',
-      corpo: `<div class="aviso aviso-info">Aparece separado do resultado operacional (não é receita nem despesa).</div><form id="form-soc" class="grade" novalidate>
-        <label class="campo"><span>Tipo <span class="req">*</span></span><select name="tipo">${opt('aporte', 'Aporte (sócio coloca dinheiro)')}${opt('retirada', 'Retirada (sócio retira dinheiro)')}</select></label>
-        <label class="campo"><span>Conta <span class="req">*</span></span><select name="contaId">${opcoesContas('', 'Selecione...')}</select></label>
-        <label class="campo"><span>Valor <span class="req">*</span></span>${moedaInput('valor', '')}</label>
-        <label class="campo"><span>Data <span class="req">*</span></span><input type="date" name="data" value="${hojeISO()}" max="${hojeISO()}"></label>
-        <label class="campo">Sócio<input type="text" name="socio" maxlength="80"></label>
-        <label class="campo">Descrição<input type="text" name="descricao" maxlength="120"></label>
+      titulo: mv ? 'Corrigir aporte ou retirada de sócio' : 'Aporte ou retirada de sócio', tamanho: 'estreito',
+      corpo: `<div class="aviso aviso-info">${mv ? 'A correção fica registrada no histórico, com o valor anterior e o motivo.' : 'Aparece separado do resultado operacional (não é receita nem despesa).'}</div><form id="form-soc" class="grade" novalidate>
+        <label class="campo"><span>Tipo <span class="req">*</span></span><select name="tipo">${opt('aporte', 'Aporte (sócio coloca dinheiro)', mv ? mv.tipo : '')}${opt('retirada', 'Retirada (sócio retira dinheiro)', mv ? mv.tipo : '')}</select></label>
+        <label class="campo"><span>Conta <span class="req">*</span></span><select name="contaId">${opcoesContas(mv ? mv.contaId : '', 'Selecione...')}</select></label>
+        <label class="campo"><span>Valor <span class="req">*</span></span>${moedaInput('valor', mv ? mv.valor : '')}</label>
+        <label class="campo"><span>Data <span class="req">*</span></span><input type="date" name="data" value="${mv ? mv.data : hojeISO()}" max="${hojeISO()}"></label>
+        <label class="campo">Sócio<input type="text" name="socio" maxlength="80" value="${esc(mv ? mv.socio : '')}"></label>
+        <label class="campo">Descrição<input type="text" name="descricao" maxlength="120" value="${esc(mv ? mv.descricao : '')}"></label>
+        ${mv ? '<label class="campo"><span>Motivo da correção <span class="req">*</span></span><input type="text" name="motivo" maxlength="200" placeholder="Ex.: valor digitado errado"></label>' : ''}
         <div class="erro-form" id="soc-erro"></div></form>`,
-      rodape: `<button class="btn" data-fechar>Cancelar</button><button class="btn btn-primario" id="salvar-soc">Registrar</button>`
+      rodape: `<button class="btn" data-fechar>Cancelar</button><button class="btn btn-primario" id="salvar-soc">${mv ? 'Salvar correção' : 'Registrar'}</button>`
     });
     $('#salvar-soc', m).addEventListener('click', async () => {
-      const res = await executar(() => core.criarMovSocio(lerForm($('#form-soc', m))), 'Movimento registrado.');
+      const d = lerForm($('#form-soc', m));
+      const res = mv ? await executar(() => core.editarMovSocio(mv.id, d), 'Movimento corrigido.') : await executar(() => core.criarMovSocio(d), 'Movimento registrado.');
       if (!res.ok) return mostrarErro(res, $('#soc-erro', m));
       fecharModal(m); renderAba();
     });
@@ -3654,6 +3720,8 @@ const WRDCore = (function () {
     'nova-conta': () => { fecharModal(); formConta(); },
     'editar-conta': el => formConta(el.dataset.id),
     'nova-transf': () => formTransferencia(),
+    'editar-transf': (el, e) => { e.stopPropagation(); formTransferencia(core.get('transferencias', el.dataset.id)); },
+    'editar-socio': (el, e) => { e.stopPropagation(); formSocio(core.get('movimentosSocios', el.dataset.id)); },
     'faturar-titulo': (a) => formFaturar(a.dataset.id),
     'receber-demanda-fin': (a) => receberDemandaFinUI(a.dataset.id, a),
     'novo-socio': () => formSocio(),
