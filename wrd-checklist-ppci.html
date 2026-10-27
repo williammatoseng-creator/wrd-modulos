@@ -3064,7 +3064,7 @@ function criarRelatorios(core, evid) {
       <p>Inspeção dos sistemas de prevenção e combate a incêndio, com fotos, não conformidades, plano de ação e relatório no padrão WRD.</p>
       <div class="grade"><button class="btn btn-primario btn-grande" data-act="modo" data-modo="real">Entrar no sistema</button>
       <button class="btn btn-grande" data-act="modo" data-modo="demo">Abrir demonstração (dados fictícios)</button></div>
-      <p class="ajuda">A demonstração usa um armazenamento separado e nunca se mistura com os dados reais.</p><p class="ajuda">Versão 2.1.0 · build 27/10/2026, 08:35</p></div></div>`;
+      <p class="ajuda">A demonstração usa um armazenamento separado e nunca se mistura com os dados reais.</p><p class="ajuda">Versão 2.1.0 · build 27/10/2026, 08:36</p></div></div>`;
   }
   function telaLogin() {
     const primeiro = !core.hasUsers();
@@ -3244,7 +3244,7 @@ function criarRelatorios(core, evid) {
       ${campo('Cliente (empresa)', `<select name="empresaId">${opt('', 'Escolha…')}${emps.map(e => opt(e.id, e.nome)).join('')}</select>`)}
       ${campo('Unidade', '<select name="unidadeId" disabled><option value="">Escolha o cliente</option></select>', { ajuda: 'Sem unidade cadastrada? Preencha os dados abaixo: ela é criada junto com a inspeção.' })}
       <div class="span2" id="ni-unidade-nova"><div class="grade g2">${inp('uNome', '', { extra: ' placeholder="ex.: Loja Centro"' })}${inp('uUf', '', { extra: ' placeholder="SP" maxlength="2"' })}${inp('uEnd', '', { extra: ' placeholder="Rua, número"' })}${inp('uCid', '', { extra: ' placeholder="Cidade"' })}</div></div>
-      ${campo('Modelo de checklist (versão publicada)', `<select name="modeloId">${mods.map(x => opt(x.id, `${x.nome} — v${x.versao}${x.revisaoRT ? '' : ' (revisão do RT pendente)'}`)).join('')}</select>`, { req: true, cls: 'span2', ajuda: 'A inspeção congela a versão escolhida; mudanças posteriores no modelo não a afetam.' })}
+      ${campo('Modelo de checklist (versão publicada)', `<select name="modeloId">${mods.map(x => opt(x.id, `${x.nome} — v${x.versao}${x.revisaoRT ? '' : ' (revisão do RT pendente)'}`)).join('')}</select>`, { cls: 'span2', ajuda: 'A inspeção congela a versão escolhida; mudanças posteriores no modelo não a afetam.' })}
       ${campo('Data', inp('data', hojeISO(), { type: 'date' }))}${campo('Hora de início', inp('horaInicio', agora, { type: 'time' }))}
       ${campo('Acompanhantes', inp('acompanhantes', ''), { cls: 'span2', ajuda: 'Nome e função de quem acompanhou.' })}
       ${campo('Proposta de origem', inp('proposta', '', { extra: ' placeholder="NNNNNN-R" inputmode="numeric"' }), { ajuda: 'Gera o código do relatório (PCI-NNNNNN-R).' })}
