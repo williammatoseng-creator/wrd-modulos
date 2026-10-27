@@ -474,8 +474,8 @@ dl.info dd { margin: 0; }
 .u-sem-borda { border: 0 !important; }
 
 /* Método PRIME — quatro cortes do faturamento (destaque) */
-.prime-bloco { border: 2px solid var(--cor-primaria); background: linear-gradient(180deg, var(--cor-primaria-suave), var(--n-0) 60%); }
-.prime-selo { display: inline-block; background: var(--cor-primaria-escura); color: #fff; font-size: var(--fs-xs); font-weight: var(--peso-forte); letter-spacing: .12em; padding: 3px 9px; border-radius: 999px; margin-right: var(--esp-2); vertical-align: middle; }
+.prime-bloco { border: var(--borda-forte) solid var(--cor-primaria); background: linear-gradient(180deg, var(--cor-primaria-suave), var(--n-0) 60%); }
+.prime-selo { display: inline-block; background: var(--cor-primaria-escura); color: var(--n-0); font-size: var(--fs-xs); font-weight: var(--peso-forte); letter-spacing: var(--ls-lg); padding: var(--esp-1) var(--esp-3); border-radius: var(--raio-pilula); margin-right: var(--esp-2); vertical-align: middle; }
 .prime-faturamento { font-size: var(--fs-md); margin: var(--esp-1) 0 var(--esp-3); }
 .prime-grade { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--esp-3); margin-bottom: var(--esp-3); }
 .prime-corte { background: var(--n-0); border: var(--borda) solid var(--n-200); border-radius: var(--raio-lg); padding: var(--esp-3); display: flex; flex-direction: column; gap: var(--esp-1); }
@@ -483,7 +483,7 @@ dl.info dd { margin: 0; }
 .prime-nome { font-weight: var(--peso-forte); color: var(--cor-primaria-escura); }
 .prime-val { font-size: var(--fs-xl); font-weight: var(--peso-forte); }
 .prime-regra { font-size: var(--fs-xs); color: var(--n-500); }
-.prime-uso { display: flex; flex-direction: column; gap: 2px; font-size: var(--fs-xs); border-top: var(--borda) solid var(--n-200); padding-top: var(--esp-1); margin-top: var(--esp-1); }
+.prime-uso { display: flex; flex-direction: column; gap: var(--esp-1); font-size: var(--fs-xs); border-top: var(--borda) solid var(--n-200); padding-top: var(--esp-1); margin-top: var(--esp-1); }
 .prime-uso.dentro span:last-child { color: var(--ok); }
 .prime-uso.acima span:last-child { color: var(--critico); font-weight: var(--peso-forte); }
 .prime-val { text-align: left; }
@@ -1549,6 +1549,7 @@ const WRDCore = (function () {
       const quit = t.tipo === 'receber' ? 'Recebido' : 'Pago';
       if (t.cancelado) return { codigo: 'cancelado', rotulo: 'Cancelado', parcial: false };
       if (ab === 0) return { codigo: 'quitado', rotulo: quit, parcial: false };
+      if (t.aFaturar && !t.vencimento) return { codigo: 'a_faturar', rotulo: 'A faturar (sem data)', parcial: pg > 0 };
       if (t.vencimento < h) return { codigo: 'vencido', rotulo: pg > 0 ? 'Vencido (parcial)' : 'Vencido', parcial: pg > 0 };
       if (pg > 0) return { codigo: 'parcial', rotulo: 'Parcial', parcial: true };
       return { codigo: 'aberto', rotulo: 'Em aberto', parcial: false };
@@ -1567,7 +1568,7 @@ const WRDCore = (function () {
       if (!p.ativo && (!ex || ex.pessoaId !== d.pessoaId)) fail(`O ${rot} selecionado está inativo.`);
       if (!String(d.descricao || '').trim()) fail('Informe a descrição.');
       if (!Number.isInteger(d.valor) || d.valor <= 0) fail('Informe um valor maior que zero.');
-      if (!Dates.valid(d.vencimento)) fail('Informe uma data de vencimento válida.');
+      if (!d.aFaturar && !Dates.valid(d.vencimento)) fail('Informe uma data de vencimento válida.');
       if (!Dates.valid(d.competencia)) fail('Informe uma data de competência válida.');
       const c = byId('categorias', d.categoriaId);
       const tipoCat = d.tipo === 'receber' ? 'receita' : 'despesa';
@@ -1623,7 +1624,7 @@ const WRDCore = (function () {
       return {
         tipo: d.tipo, pessoaId: d.pessoaId || null, descricao: String(d.descricao || '').trim(), categoriaId: d.categoriaId || null, contaId: d.contaId || null,
         projetoId: d.projetoId || null, clienteId: d.tipo === 'pagar' ? (d.clienteId || null) : null, proposta: String(d.proposta || '').trim(), notaFiscal: String(d.notaFiscal || '').trim(),
-        formaPagamento: d.formaPagamento || '', competencia: d.competencia || d.vencimento, vencimento: d.vencimento, valor: d.valor, obs: String(d.obs || '').trim(),
+        formaPagamento: d.formaPagamento || '', competencia: d.competencia || d.vencimento, vencimento: d.aFaturar ? null : d.vencimento, aFaturar: !!d.aFaturar && d.tipo === 'receber', valor: d.valor, obs: String(d.obs || '').trim(),
         anexos: (d.anexos || []).map(a => Object.assign({ id: a.id || uid('anx'), nome: a.nome, tipo: a.tipo || '', tamanho: a.tamanho || 0 }, a.dataUrl ? { dataUrl: a.dataUrl } : {}, a.nuvem ? { nuvem: String(a.nuvem) } : {}, a.url ? { url: String(a.url) } : {}))
       };
     }
@@ -1641,6 +1642,19 @@ const WRDCore = (function () {
       }
     }
 
+    /** Receita a faturar (sem data): a data e a NF entram quando o serviço é executado e a nota é emitida. */
+    function datarNotaFiscal(id, d = {}) {
+      guard('titulo.editar');
+      const t = byId('titulos', id); if (!t) fail('Título não encontrado.');
+      if (!t.aFaturar || t.vencimento) fail('Só receita a faturar (sem data) recebe data e NF por aqui.');
+      if (!Dates.valid(d.vencimento)) fail('Informe a data de vencimento.');
+      const nf = String(d.notaFiscal || '').trim(); if (!nf) fail('Informe o número da nota fiscal emitida.');
+      return mutate(() => {
+        Object.assign(t, { vencimento: d.vencimento, notaFiscal: nf, aFaturar: false, updatedAt: nowISO() });
+        log('titulo.faturado', 'titulo', t.id, `NF ${nf}, vencimento ${Dates.fmt(d.vencimento)}`);
+        return { id: t.id };
+      });
+    }
     function criarTitulo(dados, o = {}) {
       guard('titulo.criar');
       const d = limparTitulo(dados);
@@ -1659,7 +1673,7 @@ const WRDCore = (function () {
           const grupoId = uid('grp');
           const valores = Money.split(d.valor, parcelas);
           valores.forEach((v, i) => {
-            const t = stamp(Object.assign({}, d, { valor: v, vencimento: Dates.addMonths(d.vencimento, i), grupoId, parcela: i + 1, totalParcelas: parcelas, valorTotalOriginal: d.valor, cancelado: false, anexos: i === 0 ? d.anexos : [] }), 'tit');
+            const t = stamp(Object.assign({}, d, { valor: v, vencimento: d.aFaturar ? null : Dates.addMonths(d.vencimento, i), grupoId, parcela: i + 1, totalParcelas: parcelas, valorTotalOriginal: d.valor, cancelado: false, anexos: i === 0 ? d.anexos : [] }), 'tit');
             state.titulos.push(t); criados.push(t);
           });
           log('titulo.criado', 'titulo', criados[0].id, `${d.tipo === 'receber' ? 'Receita' : 'Despesa'} "${d.descricao}" de ${Money.fmt(d.valor)} parcelada em ${parcelas}x (${valores.map(Money.fmt).join(' + ')}).`);
@@ -1903,13 +1917,14 @@ const WRDCore = (function () {
         if (f.projetoId && t.projetoId !== f.projetoId) return false;
         if (f.clienteId && clienteDe(t) !== f.clienteId) return false;
         if (f.fornecedorId && !(t.tipo === 'pagar' && t.pessoaId === f.fornecedorId)) return false;
+        if ((f.vencDe || f.vencAte) && !t.vencimento) return false;
         if (f.vencDe && t.vencimento < f.vencDe) return false;
         if (f.vencAte && t.vencimento > f.vencAte) return false;
         if (f.situacao) {
           const st = status(t, h).codigo, ab = aberto(t), pg = pago(t);
           if (f.situacao === 'abertos' && !(ab > 0)) return false;
           if (f.situacao === 'parcial' && !(pg > 0 && ab > 0)) return false;
-          if (['aberto', 'vencido', 'quitado', 'cancelado'].includes(f.situacao) && st !== f.situacao) return false;
+          if (['aberto', 'vencido', 'quitado', 'cancelado', 'a_faturar'].includes(f.situacao) && st !== f.situacao) return false;
         }
         if (busca) {
           const p = byId('pessoas', t.pessoaId), pj = byId('projetos', t.projetoId), c = byId('categorias', t.categoriaId);
@@ -1921,7 +1936,7 @@ const WRDCore = (function () {
     }
     function listarTitulos(f = {}) {
       guard('ler');
-      return filtrarTitulos(f).sort((a, b) => a.vencimento.localeCompare(b.vencimento) || ordem(a) - ordem(b)).map(enriquecer);
+      return filtrarTitulos(f).sort((a, b) => (a.vencimento || '9999-12-31').localeCompare(b.vencimento || '9999-12-31') || ordem(a) - ordem(b)).map(enriquecer);
     }
     function titulo(id) { guard('ler'); const t = byId('titulos', id); return t ? enriquecer(t) : null; }
     function baixasDoTitulo(id) {
@@ -2035,6 +2050,7 @@ const WRDCore = (function () {
       const by = new Map(meses.map(m => [m.mes, m]));
       for (const t of filtrarTitulos(Object.assign({}, f, { vencDe: de, vencAte: ate, situacao: '' }))) {
         if (t.cancelado) continue;
+        if (!t.vencimento) continue;
         const m = by.get(t.vencimento.slice(0, 7)); if (!m) continue;
         if (t.tipo === 'receber') { m.prevEntradas += t.valor; m.abertoEntradas += aberto(t); } else { m.prevSaidas += t.valor; m.abertoSaidas += aberto(t); }
       }
@@ -2217,7 +2233,7 @@ const WRDCore = (function () {
 
     return {
       SCHEMA_VERSION, demo,
-      on, emit, hoje, dadosPrime,
+      on, emit, hoje, dadosPrime, datarNotaFiscal,
       hasUsers, setupAdmin, login, logout, usuariosDemo, entrarDemo, entrarPelaNuvem, user, can, listarUsuarios, salvarUsuario, alterarSenha,
       salvarConfig, config, emitirNumeroRelatorio,
       salvarPessoa, salvarProjeto, salvarCategoria, salvarConta,
@@ -2715,7 +2731,7 @@ const WRDCore = (function () {
     const linhas = lista.map(t => {
       const podeBaixar = t.aberto > 0 && core.can('baixa.registrar');
       return `<tr class="clicavel ${t.cancelado ? 'riscado' : ''}" data-act="detalhe" data-id="${t.id}">
-        <td data-l="Vencimento" class="num">${D(t.vencimento)}</td>
+        <td data-l="Vencimento" class="num">${t.vencimento ? D(t.vencimento) : '<span class="chip">Sem data</span>'}</td>
         ${o.mostrarTipo ? `<td data-l="Tipo">${t.tipo === 'receber' ? 'Receber' : 'Pagar'}</td>` : ''}
         <td data-l="${t.tipo === 'receber' ? 'Cliente' : 'Fornecedor'}">${esc(t.pessoaNome)}</td>
         <td data-l="Descrição">${esc(t.descricao)}${t.serieRotulo ? ` <span class="muted xs">(${t.serieRotulo})</span>` : ''}${t.projetoNome ? `<div class="xs muted">${esc(t.projetoNome)}</div>` : ''}</td>
@@ -2724,7 +2740,7 @@ const WRDCore = (function () {
         <td data-l="${t.tipo === 'receber' ? 'Recebido' : 'Pago'}" class="num">${t.pago ? R(t.pago) : '—'}</td>
         <td data-l="Em aberto" class="num"><b>${R(t.aberto)}</b></td>
         <td data-l="Situação">${stBadge(t.status, t.statusRotulo)}</td>
-        <td class="acoes no-print">${podeBaixar ? `<button class="btn btn-sm btn-primario" data-act="baixar" data-id="${t.id}">${t.tipo === 'receber' ? 'Receber' : 'Pagar'}</button>` : ''}</td>
+        <td class="acoes no-print">${podeBaixar ? `<button class="btn btn-sm btn-primario" data-act="baixar" data-id="${t.id}">${t.tipo === 'receber' ? 'Receber' : 'Pagar'}</button>` : ''}${t.status === 'a_faturar' && core.can('titulo.editar') ? `<button class="btn btn-sm" data-act="faturar-titulo" data-id="${t.id}">Definir data e NF</button>` : ''}</td>
       </tr>`;
     }).join('');
     const cols = o.mostrarTipo ? 9 : 9;
@@ -3029,6 +3045,25 @@ const WRDCore = (function () {
       const res = await executar(() => core.salvarConta(d), 'Conta salva.');
       if (!res.ok) return mostrarErro(res, $('#cta-erro', m));
       fecharModal(m); render();
+    });
+  }
+  /* Receita a faturar: a data de vencimento e a NF entram quando o serviço é executado e a nota é emitida. */
+  function formFaturar(id) {
+    const t = core.listarTitulos({}).find(x => x.id === id);
+    if (!t) { toast('Título não encontrado.', 'erro'); return; }
+    const m = abrirModal({
+      titulo: 'Definir data e nota fiscal', tamanho: 'estreito',
+      corpo: `<div class="aviso aviso-info">${esc(t.pessoaNome)} · ${esc(t.descricao)} · ${R(t.valor)}. A data de recebimento e a NF são definidas quando o serviço é entregue e a nota é emitida.</div><form id="form-fat" class="grade" novalidate>
+        <label class="campo"><span>Vencimento (data de recebimento) <span class="req">*</span></span><input type="date" name="vencimento" required></label>
+        <label class="campo"><span>Número da nota fiscal <span class="req">*</span></span><input type="text" name="notaFiscal" maxlength="40" required></label>
+        <div class="erro-form" id="fat-erro"></div></form>`,
+      rodape: `<button class="btn" data-fechar>Cancelar</button><button class="btn btn-primario" id="salvar-fat">Salvar</button>`
+    });
+    $('#salvar-fat', m).addEventListener('click', async () => {
+      const d = lerForm($('#form-fat', m));
+      const res = await executar(() => core.datarNotaFiscal(id, d), 'Data e NF registradas.');
+      if (!res.ok) return mostrarErro(res, $('#fat-erro', m));
+      fecharModal(m); renderAba();
     });
   }
   function formTransferencia() {
@@ -3573,6 +3608,7 @@ const WRDCore = (function () {
     'nova-conta': () => { fecharModal(); formConta(); },
     'editar-conta': el => formConta(el.dataset.id),
     'nova-transf': () => formTransferencia(),
+    'faturar-titulo': (a) => formFaturar(a.dataset.id),
     'novo-socio': () => formSocio(),
     'sub-cad': el => { ui.subCad = el.dataset.sub; renderAba(); },
     'nova-pessoa': () => formPessoa(),
