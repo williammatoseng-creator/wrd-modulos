@@ -662,7 +662,7 @@ const WRDNuvem = (function () {
       const h = { apikey: CONFIG.chave, 'Content-Type': 'application/json' };
       if (autenticar) { await garantirToken(); h.Authorization = 'Bearer ' + sessao.access_token; }
       let r;
-      try { r = await f(CONFIG.url + caminho, Object.assign({ headers: h }, opc)); } catch (e) { throw erro('Sem conexão com a nuvem.', 'OFFLINE'); }
+      try { r = await f(CONFIG.url + caminho, Object.assign({}, opc, { headers: Object.assign({}, h, (opc && opc.headers) || {}) })); } catch (e) { throw erro('Sem conexão com a nuvem.', 'OFFLINE'); }
       const txt = await r.text(); let j = null; try { j = txt ? JSON.parse(txt) : null; } catch (e) { j = txt; }
       if (!r.ok) {
         const m = (j && (j.message || j.msg || j.error_description || j.error)) || ('HTTP ' + r.status);
@@ -694,6 +694,10 @@ const WRDNuvem = (function () {
       async ler() { const l = await http(`/rest/v1/estado_modulo?modulo=eq.${modulo}&select=dados,versao,atualizado_em,aparelho`, { method: 'GET' }, true); return l && l[0] ? l[0] : null; },
       async salvar(dados, versao, aparelho) { return http('/rest/v1/rpc/salvar_estado', { method: 'POST', body: JSON.stringify({ p_modulo: modulo, p_dados: dados, p_versao: versao, p_aparelho: aparelho || null }) }, true); },
       async uso() { return http('/rest/v1/rpc/uso_modulos', { method: 'POST', body: '{}' }, true); },
+      /** Demandas aprovadas no Comercial aguardando este módulo (tabela importacoes, status pendente). */
+      async pendencias() { return (await http(`/rest/v1/importacoes?modulo=eq.${modulo}&status=eq.pendente&select=*&order=criado_em.asc`, { method: 'GET' }, true)) || []; },
+      /** Marca a demanda como recebida por este módulo (o registro da fila permanece). */
+      async marcarRecebida(id) { return http(`/rest/v1/importacoes?id=eq.${encodeURIComponent(id)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ status: 'aceita', revisado_em: new Date().toISOString() }) }, true); },
       /** Envia um PDF ao bucket privado "documentos" (pasta do módulo). Devolve o caminho guardado no registro. */
       async enviarPdf(blob) {
         await garantirToken();
@@ -1004,7 +1008,7 @@ const WRDNuvem = (function () {
       catch (er) { if (janela) janela.close(); o.toast(er.message, 'erro'); }
     });
 
-    return { disponivel, abrir, parar, telaHTML, botaoTopo, abaConfig, posRender, usuarioEmail: () => (cli && cli.usuario() ? cli.usuario().email : null), publicarEvento: (tipo, id, payload) => (cli && cli.conectado() ? cli.publicarEvento(tipo, id, payload) : Promise.resolve(null)), ativo: () => !!sync, situacao: () => (sync ? sync.situacao() : null), anexoHTML, pdfNaNuvem, anexarLote };
+    return { disponivel, abrir, parar, telaHTML, botaoTopo, pendencias: () => (cli && cli.conectado() ? cli.pendencias() : Promise.resolve([])), marcarRecebida: id => cli.marcarRecebida(id), abaConfig, posRender, usuarioEmail: () => (cli && cli.usuario() ? cli.usuario().email : null), publicarEvento: (tipo, id, payload) => (cli && cli.conectado() ? cli.publicarEvento(tipo, id, payload) : Promise.resolve(null)), ativo: () => !!sync, situacao: () => (sync ? sync.situacao() : null), anexoHTML, pdfNaNuvem, anexarLote };
   }
 
   return { CONFIG, cliente, sincronizador, mesclar, integrar, MSG };
@@ -3064,7 +3068,7 @@ function criarRelatorios(core, evid) {
       <p>Inspeção dos sistemas de prevenção e combate a incêndio, com fotos, não conformidades, plano de ação e relatório no padrão WRD.</p>
       <div class="grade"><button class="btn btn-primario btn-grande" data-act="modo" data-modo="real">Entrar no sistema</button>
       <button class="btn btn-grande" data-act="modo" data-modo="demo">Abrir demonstração (dados fictícios)</button></div>
-      <p class="ajuda">A demonstração usa um armazenamento separado e nunca se mistura com os dados reais.</p><p class="ajuda">Versão 2.1.0 · build 27/10/2026, 08:36</p></div></div>`;
+      <p class="ajuda">A demonstração usa um armazenamento separado e nunca se mistura com os dados reais.</p><p class="ajuda">Versão 2.1.0 · build 27/10/2026, 08:53</p></div></div>`;
   }
   function telaLogin() {
     const primeiro = !core.hasUsers();
@@ -3281,6 +3285,39 @@ function criarRelatorios(core, evid) {
   /* =================================================================== */
   /* VISTORIA (tela principal)                                            */
   /* =================================================================== */
+  /* Sistemas neste local: aparecem só os marcados. Para marcar, abre a lista com busca (42 sistemas não cabem numa linha no celular). */
+  function chipsNesteLocal(i, a) {
+    const marcados = i.modelo.sistemas.filter(x => a.sistemas.includes(x.id));
+    return `<div class="neste-local"><div class="chips" role="group" aria-label="Sistemas neste local"><span class="peq muted">Neste local:</span>${marcados.map(x => `<button class="chip-btn" data-act="toggle-sis" data-sis="${x.id}" aria-pressed="true" title="Tocar para tirar">${esc(x.codigo)} ×</button>`).join('') || '<span class="peq muted">nenhum marcado</span>'}<button class="chip-btn" data-act="escolher-sis">+ Sistema</button><button class="chip-btn" data-act="fora-lista">+ Fora da lista</button></div></div>`;
+  }
+  /* Lista completa com busca. Cada toque grava na hora. */
+  function modalEscolherSis() {
+    const i = insp(), a = i.areas.find(x => x.id === UI.areaId); if (!a) return;
+    const m = modal('Sistemas neste local', `<input type="search" name="busca" placeholder="Buscar sistema…" aria-label="Buscar sistema"><div class="chips" id="lista-sis" style="margin-top:var(--esp-2)"></div>`, { rodape: '<button class="btn btn-primario" data-fechar>Pronto</button>', aoFechar: () => renderTela() });
+    const pintar = () => {
+      const q = m.querySelector('[name=busca]').value.trim().toLowerCase(); const atual = insp().areas.find(x => x.id === a.id);
+      m.querySelector('#lista-sis').innerHTML = i.modelo.sistemas.filter(x => !q || (x.codigo + ' ' + x.nome).toLowerCase().includes(q)).map(x => `<button class="chip-btn" data-sis-m="${x.id}" aria-pressed="${atual.sistemas.includes(x.id)}">${esc(x.codigo)} · ${esc(x.nome)}</button>`).join('');
+    };
+    m.querySelector('[name=busca]').oninput = pintar;
+    m.addEventListener('click', e => { const b = e.target.closest('[data-sis-m]'); if (!b) return; toggleSisArea(b.dataset.sisM); pintar(); });
+    pintar();
+  }
+  function toggleSisArea(sid) {
+    const i = insp(), a = i.areas.find(x => x.id === UI.areaId); if (!a) return;
+    const sistemas = a.sistemas.includes(sid) ? a.sistemas.filter(x => x !== sid) : [...a.sistemas, sid];
+    tentar(() => { core.salvarArea(i.id, a.id, { nome: a.nome, obs: a.obs, sistemas }); renderTela(); });
+  }
+  /* O que não está na lista do checklist: anotado na área (e na foto), sem virar item. */
+  function modalForaLista() {
+    const i = insp(), a = i.areas.find(x => x.id === UI.areaId); if (!a) return;
+    const m = modal('Fora da lista', '<p class="peq">Anote o que encontrou e não está no checklist. Vai para a área do relatório, sem virar item.</p><textarea name="txt" rows="3" placeholder="ex.: caixa de incêndio sem mangueira"></textarea>', { rodape: '<button class="btn" data-foto-f>📷 Foto</button><button class="btn btn-primario" data-ok>Salvar</button>' });
+    m.querySelector('[data-foto-f]').onclick = () => capturar('camera', { inspecaoId: i.id, areaId: a.id, classificacao: 'geral', origem: 'camera' });
+    m.querySelector('[data-ok]').onclick = () => {
+      const t = m.querySelector('[name=txt]').value.trim(); if (!t) { toast('Escreva o que encontrou.', 'erro'); return; }
+      const linha = '[' + horaBR(new Date().toISOString()) + '] ' + t;
+      tentar(() => { core.salvarArea(i.id, a.id, { nome: a.nome, obs: [a.obs, linha].filter(Boolean).join(String.fromCharCode(10)), sistemas: a.sistemas }); m.fechar(); renderTela(); toast('Anotado na área.', 'ok'); });
+    };
+  }
   function telaVistoria(el) {
     const i = insp();
     if (!i) { el.innerHTML = `<div class="cartao"><h2>Nenhuma inspeção aberta</h2><p>Escolha uma inspeção em "Inspeções" ou crie uma nova.</p><div class="linha"><button class="btn btn-primario" data-tela="inicio">Ver inspeções</button>${core.can('inspecao.salvar') ? '<button class="btn" data-act="nova-inspecao">+ Nova inspeção</button>' : ''}</div></div>`; return; }
@@ -3298,6 +3335,7 @@ function criarRelatorios(core, evid) {
       <div class="contagens"><span class="chip ok">C ${p.C}</span><span class="chip critico">NC ${p.NC}</span><span class="chip">NA ${p.NA}</span><span class="chip alerta">NV ${p.NV}</span><span class="chip ${p.pendente ? 'alerta' : 'ok'}">Pendentes ${p.pendente}</span></div>
       <h2 class="peq muted">Áreas visitadas</h2>
       <div class="areas" role="group" aria-label="Áreas">${i.areas.map(ar => `<button class="area-btn" data-act="area" data-id="${ar.id}" aria-pressed="${ar.id === UI.areaId}"><b>${esc(ar.nome)}</b><span>${progArea(ar)} itens</span></button>`).join('')}${podeEditar ? '<button class="area-btn nova" data-act="nova-area">+ Área</button>' : ''}</div>
+      ${a ? chipsNesteLocal(i, a) : ''}
       ${a ? `<div class="linha entre"><div class="chips" role="group" aria-label="Filtro de itens">${[['todos', 'Todos'], ['pendentes', 'Pendentes'], ['NC', 'Não conformes']].map(([k, r]) => `<button class="chip-btn" data-act="filtro" data-f="${k}" aria-pressed="${UI.filtro === k}">${r}</button>`).join('')}</div>
           <div class="linha"><input type="search" id="busca-item" placeholder="Buscar item…" value="${esc(UI.busca)}" aria-label="Buscar item"></div></div>
         <div class="lista-itens" id="lista-itens">${listaItens(i, a, podeEditar)}</div>
@@ -3305,6 +3343,13 @@ function criarRelatorios(core, evid) {
         : `<div class="cartao"><p>Nenhuma área registrada. Crie as áreas durante a visita (portaria, administrativo, casa de bombas…).</p>${podeEditar ? '<button class="btn btn-primario btn-grande" data-act="nova-area">+ Criar área</button>' : ''}</div>`}`;
     const b = $('#busca-item', el); if (b) b.oninput = () => { UI.busca = b.value; $('#lista-itens').innerHTML = listaItens(i, a, podeEditar); evid.observar($('#lista-itens')); };
   }
+  /* Um sistema aberto por vez, para a lista não ficar com itens soltos. */
+  document.addEventListener('toggle', e => {
+    const d = e.target; if (!(d instanceof HTMLDetailsElement) || !d.classList.contains('sis')) return;
+    if (!d.open) { if (UI.sisAberto === d.dataset.sis) UI.sisAberto = null; return; }
+    UI.sisAberto = d.dataset.sis;
+    d.parentElement && d.parentElement.querySelectorAll(':scope > details.sis').forEach(o => { if (o !== d) o.open = false; });
+  }, true);
   function listaItens(i, a, podeEditar) {
     const q = UI.busca.trim().toLowerCase();
     const sisHtml = a.sistemas.map(sid => {
@@ -3317,7 +3362,8 @@ function criarRelatorios(core, evid) {
       });
       if (!its.length) return '';
       const pend = s.itens.filter(it => { const r = i.respostas[core.chave(a.id, it.id)]; return !r || !r.situacao; }).length;
-      return `<details class="sis" open><summary><span>${esc(s.codigo)} · ${esc(s.nome)}</span>${pend ? `<span class="pend">${pend} pendente(s)</span>` : '<span class="chip ok">completo</span>'}</summary>${its.map(it => linhaItem(i, a, s, it, podeEditar)).join('')}</details>`;
+      const abrir = !!q || UI.filtro !== 'todos' || UI.sisAberto === s.id;
+      return `<details class="sis" data-sis="${esc(s.id)}"${abrir ? ' open' : ''}><summary><span>${esc(s.codigo)} · ${esc(s.nome)}</span>${pend ? `<span class="pend">${pend} pendente(s)</span>` : '<span class="chip ok">completo</span>'}</summary>${its.map(it => linhaItem(i, a, s, it, podeEditar)).join('')}</details>`;
     }).join('');
     return sisHtml || (a.sistemas.length ? '<p class="muted">Nenhum item neste filtro.</p>' : `<div class="cartao"><p>Esta área ainda não tem sistemas. Escolha quais sistemas existem nela.</p>${podeEditar ? '<button class="btn btn-primario" data-act="editar-area">Escolher sistemas</button>' : ''}</div>`);
   }
@@ -3948,6 +3994,9 @@ function criarRelatorios(core, evid) {
       sit: () => aoSituacao(d.item, d.s),
       item: () => abrirItem(d.item),
       'salvar-insp': () => tentar(() => { core.salvarAgora(); const st = core.statusSalvamento(); if (st.erro) toast('Não foi possível salvar: ' + st.erro, 'erro'); else toast('Inspeção salva no aparelho.', 'ok'); atualizarSalvo(); }),
+      'toggle-sis': () => toggleSisArea(d.sis),
+      'fora-lista': () => modalForaLista(),
+      'escolher-sis': () => modalEscolherSis(),
       'foto-item': () => { const i = insp(); const r = i.respostas[core.chave(UI.areaId, d.item)]; capturar('camera', { inspecaoId: i.id, areaId: UI.areaId, itemId: d.item, classificacao: r && r.situacao === 'NC' ? 'nao_conformidade' : r && r.situacao === 'C' ? 'conformidade' : 'geral', origem: 'camera' }); },
       'foto-area': () => { const i = insp(); capturar('camera', { inspecaoId: i.id, areaId: UI.areaId, classificacao: 'geral', origem: 'camera' }); },
       'foto-geral': () => { const i = insp(); capturar(d.modo, { inspecaoId: i.id, areaId: UI.filtroFotos.areaId || null, classificacao: 'geral', origem: d.modo }); },
