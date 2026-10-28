@@ -1134,7 +1134,7 @@ const WRDCore = (function () {
     { area: 'Projeção', regra: 'Saldo projetado = saldo atual + em aberto a receber − em aberto a pagar com vencimento até a data; vencidos em aberto entram como de hoje.', fonte: 'Pedido original, item 7; ' + AP19 + ' (vencidos como de hoje)', status: 'CONFIRMADO' },
     { area: 'Prazos', regra: 'Vencido = vencimento anterior a hoje no fuso configurado (padrão America/Sao_Paulo). Vence hoje não é atraso.', fonte: 'Pedido original (protocolo, item 6)', status: 'CONFIRMADO' },
     { area: 'Lançamentos', regra: 'Parcelamento: total ÷ nº de parcelas, em centavos; a sobra de centavos vai para as primeiras parcelas e a soma é o total exato.', fonte: AP19, status: 'CONFIRMADO' },
-    { area: 'Lançamentos', regra: 'Parcelamento de 1 a 120 parcelas; recorrência mensal de 2 a 60 ocorrências, só para contas a pagar; parcelamento e recorrência não se combinam no mesmo lançamento.', fonte: 'Proposto pelo executor; Aprovado pelo William em 20/10/2026 (mantido em 120 parcelas)', status: 'CONFIRMADO' },
+    { area: 'Lançamentos', regra: 'Parcelamento de 1 a 120 parcelas; recorrência mensal de 2 a 60 ocorrências, para contas a pagar e a receber (receita recorrente precisa de vencimento); parcelamento e recorrência não se combinam no mesmo lançamento.', fonte: 'Proposto pelo executor; Aprovado pelo William em 20/10/2026 (mantido em 120 parcelas)', status: 'CONFIRMADO' },
     { area: 'Lançamentos', regra: 'Alerta de possível duplicidade: mesmo tipo e mesma pessoa, com mesmo valor e mesmo vencimento, ou mesma nota fiscal. Se as duas NFs forem diferentes, não é duplicidade (mesmo cliente, projeto ou pedido com NF diferente são documentos distintos). Quando houver alerta, o usuário analisa e decide se lança mesmo assim.', fonte: 'Regra definida pelo William em 20/10/2026 (NF diferente não é duplicidade)', status: 'CONFIRMADO' },
     { area: 'Cadastros', regra: 'Alerta de cadastro parecido: mesmo nome (sem diferença de maiúsculas e acentos) ou mesmo CNPJ/CPF; serviço/projeto com mesmo nome para o mesmo cliente.', fonte: 'Pedido original (alerta de duplicidade); Aprovado pelo William em 20/10/2026', status: 'CONFIRMADO' },
     { area: 'Baixas', regra: 'Taxa da baixa, opção 1 (embutida, padrão): a receber = abatido + juros − desconto − taxa; a pagar = abatido + juros − desconto + taxa.', fonte: 'Pedido do William em 19/10/2026 (duas opções selecionáveis)', status: 'CONFIRMADO' },
@@ -1663,6 +1663,23 @@ const WRDCore = (function () {
         return { id: t.id };
       });
     }
+    /* Vários lançamentos de uma vez (ex.: 3 recebimentos da mesma empresa com valores e vencimentos diferentes).
+       base: campos comuns (pessoa, descrição, categoria, conta, competência, projeto, NF...). linhas: [{ valor, vencimento, notaFiscal?, descricao? }].
+       Tudo é validado antes: se uma linha estiver errada, nenhuma é gravada. */
+    function criarLote(base, linhas, o = {}) {
+      guard('titulo.criar');
+      if (!Array.isArray(linhas) || !linhas.length) fail('Informe pelo menos um lançamento.');
+      if (linhas.length > 120) fail('O lote aceita até 120 lançamentos.');
+      const itens = linhas.map((l, i) => {
+        const item = Object.assign({}, base, { valor: l.valor, vencimento: l.vencimento, notaFiscal: l.notaFiscal != null ? l.notaFiscal : base.notaFiscal, descricao: l.descricao || base.descricao, parcelas: 1, recorrencia: 0 });
+        try { validarTitulo(limparTitulo(item)); } catch (e) { e.message = 'Linha ' + (i + 1) + ': ' + e.message; throw e; }
+        return item;
+      });
+      if (!o.confirmar) itens.forEach(it => verificarDuplicidade(limparTitulo(it)));
+      const criados = [];
+      itens.forEach(it => { criados.push(...criarTitulo(it, { confirmar: true })); });
+      return criados;
+    }
     function criarTitulo(dados, o = {}) {
       guard('titulo.criar');
       const d = limparTitulo(dados);
@@ -1671,7 +1688,7 @@ const WRDCore = (function () {
       const recorrencia = dados.recorrencia == null || dados.recorrencia === '' ? 0 : Number(dados.recorrencia);
       if (!Number.isInteger(parcelas) || parcelas < 1 || parcelas > 120) fail('Número de parcelas deve ser de 1 a 120.');
       if (!Number.isInteger(recorrencia) || recorrencia < 0 || recorrencia > 60 || recorrencia === 1) fail('Recorrência deve ter de 2 a 60 ocorrências mensais (ou nenhuma).');
-      if (recorrencia && d.tipo !== 'pagar') fail('Recorrência está disponível para contas a pagar. Para receitas, use parcelamento.');
+      if (recorrencia && d.aFaturar) fail('Receita recorrente precisa de vencimento: não use "a faturar" (sem data).');
       if (recorrencia && parcelas > 1) fail('Use parcelamento ou recorrência, não os dois no mesmo lançamento.');
       if (parcelas > 1 && d.valor < parcelas) fail('Valor insuficiente para o número de parcelas.');
       if (!o.confirmar) verificarDuplicidade(Object.assign({}, d, { valor: parcelas > 1 ? Money.split(d.valor, parcelas)[0] : d.valor }));
@@ -2327,7 +2344,7 @@ const WRDCore = (function () {
       hasUsers, setupAdmin, login, logout, usuariosDemo, entrarDemo, entrarPelaNuvem, user, can, listarUsuarios, salvarUsuario, alterarSenha,
       salvarConfig, config, emitirNumeroRelatorio,
       salvarPessoa, salvarProjeto, salvarCategoria, salvarConta,
-      criarTitulo, receberDemandaComercial, editarTitulo, cancelarTitulo, registrarBaixa, estornarBaixa,
+      criarTitulo, criarLote, receberDemandaComercial, editarTitulo, cancelarTitulo, registrarBaixa, estornarBaixa,
       criarTransferencia, estornarTransferencia, editarTransferencia, criarMovSocio, estornarMovSocio, editarMovSocio,
       lista, get, titulo, listarTitulos, baixasDoTitulo, serieDe, movimentos, saldoConta: (id, ate) => { guard('ler'); return saldoConta(id, ate); }, saldos,
       kpis, projecao, fluxoMensal, porCategoria, resultadoDireto, inadimplencia, resumoMensal, historico,
@@ -2885,8 +2902,9 @@ const WRDCore = (function () {
       </div>
       ${!edit ? `<div class="grade g2">
         <label class="campo">Parcelas<input type="number" name="parcelas" min="1" max="120" step="1" value="1"><span class="ajuda" id="ajuda-parc">À vista (1 parcela).</span></label>
-        ${!rec ? '<label class="campo">Recorrência mensal (nº de meses)<input type="number" name="recorrencia" min="0" max="60" step="1" value="0"><span class="ajuda">0 = não recorrente. Ex.: 12 gera 12 despesas mensais.</span></label>' : '<div></div>'}
+        <label class="campo">Recorrência mensal (nº de meses)<input type="number" name="recorrencia" min="0" max="60" step="1" value="0"><span class="ajuda">0 = não recorrente. Ex.: 12 gera 12 lançamentos mensais do mesmo valor.</span></label>
       </div>` : ''}
+      ${!edit ? '<div class="campo span2"><span>Outros lançamentos desta mesma pessoa (opcional)</span><span class="ajuda">Cada linha é um lançamento com o seu valor, vencimento e NF. Use quando forem valores ou datas diferentes.</span><div id="linhas-extra"></div><div class="linha"><button type="button" class="btn btn-sm" id="add-linha">+ Adicionar lançamento</button></div></div>' : ''}
       <details class="mais" ${t.projetoId || t.proposta || t.notaFiscal || t.obs || (t.anexos || []).length || (edit && t.competencia !== t.vencimento) ? 'open' : ''}><summary>Mais informações (opcional)</summary>
         <div class="grade g2">
           ${!rec ? `<label class="campo">Cliente vinculado<select name="clienteId">${opcoesPessoas(null, t.clienteId, 'Nenhum (despesa administrativa)')}</select><span class="ajuda">Use para custo direto de um cliente.</span></label>` : ''}
@@ -2908,6 +2926,31 @@ const WRDCore = (function () {
       rodape: `<button class="btn" data-fechar>Cancelar</button><button class="btn btn-primario" id="salvar-tit">${edit ? 'Salvar alterações' : 'Lançar'}</button>`
     });
     const form = $('#form-tit', m);
+    // Lançamentos extras (lote): cada linha vira um lançamento com valor, vencimento e NF próprios.
+    const linhasBox = $('#linhas-extra', m);
+    let nLinhas = 0;
+    const addLinha = () => {
+      if (!linhasBox) return;
+      const i = nLinhas++;
+      const div = document.createElement('div');
+      div.className = 'linha u-nowrap'; div.dataset.linha = String(i);
+      div.innerHTML = moedaInput('lv_' + i, '') + '<input type="date" name="lvenc_' + i + '" aria-label="Vencimento"><input type="text" name="lnf_' + i + '" maxlength="40" placeholder="NF" aria-label="Nota fiscal"><button type="button" class="btn btn-sm" data-rm-linha="' + i + '" aria-label="Remover linha">×</button>';
+      linhasBox.appendChild(div);
+    };
+    if (linhasBox) {
+      $('#add-linha', m).addEventListener('click', addLinha);
+      m.addEventListener('click', e => { const b = e.target.closest('[data-rm-linha]'); if (b) b.parentElement.remove(); });
+    }
+    const lerLinhasExtra = () => {
+      const extras = [];
+      if (linhasBox) linhasBox.querySelectorAll('[data-linha]').forEach(div => {
+        const i = div.dataset.linha;
+        const valor = Money.parse(form['lv_' + i].value), vencimento = form['lvenc_' + i].value, notaFiscal = form['lnf_' + i].value.trim();
+        if (!valor && !vencimento && !notaFiscal) return;
+        extras.push({ valor, vencimento, notaFiscal });
+      });
+      return extras;
+    };
     const desenharAnexos = () => {
       $('#lista-anexos', m).innerHTML = anexos.map((a, i) => `<div class="linha"><span>📎 ${esc(a.nome)} <span class="muted xs">${Math.round((a.tamanho || 0) / 1024)} KB</span></span><button type="button" class="btn-link" data-rm-anexo="${i}">remover</button></div>`).join('') || '<span class="muted xs">Nenhum anexo.</span>';
     };
@@ -2958,9 +3001,14 @@ const WRDCore = (function () {
       if (!d.competencia) d.competencia = edit ? t.competencia : hojeISO();
       d.parcelas = d.parcelas ? parseInt(d.parcelas, 10) : 1;
       d.recorrencia = d.recorrencia ? parseInt(d.recorrencia, 10) : 0;
+      const extras = edit ? [] : lerLinhasExtra();
+      if (extras.length && (d.parcelas > 1 || d.recorrencia)) { erro.textContent = 'Lançamentos em lote não combinam com parcelamento ou recorrência.'; return; }
+      const linhas = [{ valor: d.valor, vencimento: d.vencimento, notaFiscal: d.notaFiscal }].concat(extras);
       const res = edit
         ? await executar(conf => core.editarTitulo(t.id, d, { escopo: d.escopo, confirmar: conf }))
-        : await executar(conf => core.criarTitulo(d, { confirmar: conf }));
+        : extras.length
+          ? await executar(conf => core.criarLote(d, linhas, { confirmar: conf }))
+          : await executar(conf => core.criarTitulo(d, { confirmar: conf }));
       if (!res.ok) return mostrarErro(res, erro);
       fecharModal(m);
       if (edit) toast(res.r.preservados ? `${res.r.alterados} ocorrência(s) alterada(s); ${res.r.preservados} já paga(s) preservada(s).` : 'Alterações salvas.', 'ok');
