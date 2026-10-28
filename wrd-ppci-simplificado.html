@@ -623,6 +623,7 @@ table.tab tr.clicavel:hover td { background: var(--cor-primaria-suave); }
 .mapa td.cel { text-align: center; padding: var(--esp-1); }
 .mapa th.cat { writing-mode: vertical-rl; transform: rotate(180deg); white-space: nowrap; font-size: var(--fs-xs); vertical-align: bottom; padding: var(--esp-2) var(--esp-1); }
 .mapa td.uni { white-space: nowrap; }
+.sel-estado { min-width: 13em; max-width: 100%; }
 .btn-celula { font-family: inherit; margin: 0; cursor: pointer; min-width: 2.6em; }
 .btn-celula:hover { text-decoration: underline; }
 .btn-celula:focus-visible { outline: 2px solid var(--cor-primaria-escura); outline-offset: 2px; }
@@ -2060,7 +2061,7 @@ if (typeof module !== 'undefined') module.exports = { criarNucleo, adaptadorMemo
         ${ed ? `<div class="linha"><button class="btn btn-primario" data-act="novo-doc">+ Documento</button><button class="btn" data-act="lista-base">Aplicar lista inicial${norma && (norma.documentosExigidos || []).length ? ' + exigências da norma' : ''}</button></div>` : ''}
         ${docs.length ? `<div class="tabela-wrap"><table class="tab"><thead><tr><th>Documento</th><th>Aplicabilidade</th><th>Estado</th><th>Entrega</th><th>Arquivo</th><th>Prazo</th><th></th></tr></thead><tbody>
         ${docs.map(d => { const v = d.versoes[d.versoes.length - 1]; return `<tr><td><b>${esc(d.categoria)}</b><div class="xs muted">${esc(NATUREZA[d.natureza])}${d.fonte ? ' · ' + esc(d.fonte) : ''}</div>${d.motivo ? `<div class="xs txt-critico">${esc(d.motivo)}</div>` : ''}${d.estado === 'nao_se_aplica' ? `<div class="xs muted">Justificativa: ${esc(d.justificativaNA)}</div>` : ''}</td>
-          <td>${chipAplic(d.aplicavel)}</td><td>${chipEstado(d.estado)}${d.estado === 'validado' && !d.versoes.length ? '<div class="xs txt-alerta">Sem arquivo registrado</div>' : ''}</td><td>${esc(RESPONSAVEL[d.responsavel])}</td>
+          <td>${chipAplic(d.aplicavel)}</td><td>${podeEditar() ? seletorEstadoDoc(d) : chipEstado(d.estado)}${d.estado === 'validado' && !d.versoes.length ? '<div class="xs txt-alerta">Sem arquivo registrado</div>' : ''}</td><td>${esc(RESPONSAVEL[d.responsavel])}</td>
           <td class="xs">${v ? `v${v.versao} · ${esc(v.arquivo || '')}${v.link ? ` <a href="${esc(v.link)}" target="_blank" rel="noopener noreferrer">link</a>` : ''}<div class="muted">recebido ${dataBR(v.recebidoEm)}</div>` : '<span class="muted">—</span>'}</td>
           <td class="xs">${esc(dataBR(d.prazoAcordado))}</td><td><button class="btn btn-sm" data-act="doc" data-id="${d.id}">Ações</button></td></tr>`; }).join('')}</tbody></table></div>` : '<p class="muted">Nenhum documento na lista. Use "Aplicar lista inicial" (ponto de partida, a confirmar na norma da UF) ou inclua os documentos um a um.</p>'}
       </details>
@@ -2099,6 +2100,7 @@ if (typeof module !== 'undefined') module.exports = { criarNucleo, adaptadorMemo
     return `${ed ? '<div class="linha"><button class="btn" data-act="nova-pen">+ Pendência (WRD, prestador, órgão ou cliente)</button></div>' : ''}${tabelaPend(l, false, ed)}`;
   }
   function ligarProcesso(p) {
+    $$('select[data-estado-doc]').forEach(s => s.addEventListener('change', () => { const a = s.value; s.value = ''; if (a) acaoDoc(a, core.documento(s.dataset.estadoDoc)); }));
     const fe = $('#form-enq'); if (fe) fe.onsubmit = e => { e.preventDefault(); try { core.definirEnquadramento(p.id, { enquadramento: fv(fe, 'enquadramento'), normaId: fv(fe, 'normaId'), fundamento: fv(fe, 'fundamento') }); toast('Enquadramento salvo.', 'ok'); renderTela(); } catch (er) { const b = $('#enq-erro'); b.textContent = er.message; b.classList.remove('oculto'); } };
     const fl = $('#form-lic'); if (fl) fl.onsubmit = e => { e.preventDefault(); tentar(() => { core.salvarLicenca(p.id, { numero: fv(fl, 'numero'), tipo: fv(fl, 'tipo'), emissao: fv(fl, 'emissao'), validade: fv(fl, 'validade'), origem: fv(fl, 'origem'), situacaoMapa: fv(fl, 'situacaoMapa'), anoMapa: fv(fl, 'anoMapa') }); toast('Licença salva: ' + situacaoLicenca(core.processo(p.id)).rot, 'ok'); renderTela(); }); };
     const fc = $('#form-chk'); if (fc) fc.onsubmit = e => { e.preventDefault(); tentar(() => { const ch = {}; Object.keys(CHECAGENS_PROTOCOLO).forEach(k => { ch[k] = fv(fc, k); }); core.salvarChecagens(p.id, ch); toast('Checagens salvas.', 'ok'); renderTela(); }); };
@@ -2289,22 +2291,30 @@ if (typeof module !== 'undefined') module.exports = { criarNucleo, adaptadorMemo
     const m = core.listarModelosMapa().find(x => x.id === id); if (!m) return toast('Modelo não encontrado.', 'erro');
     UI.mapaOrdem = m.colunas.slice(); UI.mapaMarcadas = m.colunas.slice(); UI.mapaPublico = m.publico; renderTela();
   }
+  /* Estados que a equipe pode escolher para o documento. Cada um leva à tela que pede os dados daquele estado. */
+  function opcoesEstadoDoc(d) {
+    if (d.aplicavel === 'nao') return [['aplic-sim', 'Voltar a aplicável']];
+    return [
+      ['validar', 'Atendido', d.estado !== 'validado'],
+      ['solicitar', 'Falta de documentos', d.responsavel !== 'wrd' && !['validado', 'em_validacao'].includes(d.estado)],
+      ['receber', 'Recebido / em validação', true],
+      ['pendente', 'Pendente', d.estado !== 'validado'],
+      ['refazer', 'Refazer / corrigir', d.estado !== 'validado'],
+      ['aplic-nao', 'Não se aplica', true]
+    ].filter(o => o[2]).map(o => [o[0], o[1]]);
+  }
+  /* Seletor direto na linha: escolher um estado abre a tela certa; o campo volta ao estado atual se a tela for cancelada */
+  function seletorEstadoDoc(d) {
+    const atual = ESTADOS_DOC[d.estado] ? ESTADOS_DOC[d.estado].rot : '';
+    return `<select class="sel-estado" data-estado-doc="${d.id}" aria-label="Estado de ${esc(d.categoria)}"><option value="">${esc(atual)}</option>${opcoesEstadoDoc(d).map(o => `<option value="${o[0]}">${esc(o[1])}</option>`).join('')}</select>`;
+  }
   /* Escolha do estado a partir do mapa: cada opção leva à mesma tela da ficha do documento, que exige os dados do estado */
   function modalMapaEstado(id) {
     const d = core.documento(id), p = core.processo(d.processoId);
-    const opcoes = d.aplicavel === 'nao'
-      ? [['aplic-sim', 'Voltar a aplicável', true]]
-      : [
-        ['validar', 'Atendido: conferir e validar', d.estado !== 'validado'],
-        ['solicitar', 'Falta de documentos: registrar cobrança enviada', d.responsavel !== 'wrd' && !['validado', 'em_validacao'].includes(d.estado)],
-        ['receber', 'Recebido / em validação: registrar arquivo', true],
-        ['pendente', 'Pendente: com motivo explícito', d.estado !== 'validado'],
-        ['refazer', 'Refazer / corrigir: motivo e providência', d.estado !== 'validado'],
-        ['aplic-nao', 'Não se aplica: com justificativa', true]
-      ];
+    const opcoes = opcoesEstadoDoc(d);
     const m = modal(`${d.categoria} — ${core.rotuloProcesso(p)}`, `<p>${chipAplic(d.aplicavel)} ${chipEstado(d.estado)}</p>
       <p class="peq muted">Escolha o novo estado. Cada um pede os dados que o módulo exige para ele.</p>
-      <div class="acoes-doc">${opcoes.filter(o => o[2]).map(o => `<button class="btn" data-dact="${o[0]}">${esc(o[1])}</button>`).join('')}<button class="btn btn-link" data-dact="ficha">Ficha completa</button></div>`);
+      <div class="acoes-doc">${opcoes.map(o => `<button class="btn" data-dact="${o[0]}">${esc(o[1])}</button>`).join('')}<button class="btn btn-link" data-dact="ficha">Ficha completa</button></div>`);
     m.addEventListener('click', e => { const b = e.target.closest('[data-dact]'); if (!b) return; m.fechar(); acaoDoc(b.dataset.dact, d); });
   }
 
