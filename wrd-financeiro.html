@@ -2614,6 +2614,7 @@ const WRDCore = (function () {
   }
   try { const salvo = JSON.parse(prefs.get('ui') || 'null'); if (salvo && salvo.aba) { ui.aba = salvo.aba; ui.proj = salvo.proj || 30; } } catch (e) { /* preferências opcionais */ }
   function limparEstadoUI() { Object.assign(ui, { subCad: 'pessoas', subRel: 'relatorios', periodo: null, filtros: { receber: {}, pagar: {} }, extrato: {}, rel: { tipo: 'contas', f: {} }, hist: {}, filtroPessoas: null }); }
+  document.addEventListener('change', e => { if (e.target && e.target.id === 'ord-tit') { ui.ordTit = Object.assign({ campo: 'vencimento', dir: 1 }, ui.ordTit, { campo: e.target.value }); renderAba(); } });
   const salvarPrefs = () => { try { prefs.set('ui', JSON.stringify({ aba: ui.aba, proj: ui.proj })); } catch (e) { /* opcional */ } };
 
   const ABAS = [
@@ -2892,7 +2893,7 @@ const WRDCore = (function () {
         <button type="button" class="btn" data-act="limpar-filtros" data-tipo="${tipo}">Limpar filtros</button>
         </div></details>
       </form>
-      <div id="lista-tit">${tabelaTitulos(lista, {})}</div>`;
+      ${barraOrdem()}<div id="lista-tit">${tabelaTitulos(lista, {})}</div>`;
     const form = $('#filtros-tit');
     let tmr;
     const aplicar = () => { ui.filtros[tipo] = lerForm(form); $('#lista-tit').innerHTML = tabelaTitulos(core.listarTitulos(Object.assign({ tipo }, ui.filtros[tipo])), {}); };
@@ -2900,7 +2901,19 @@ const WRDCore = (function () {
     form.addEventListener('change', aplicar);
   }
 
+  /* Ordenação dos lançamentos: critério e sentido escolhidos pelo usuário (vale para todas as listas de lançamentos). */
+  const CAMPOS_ORDEM = [['vencimento', 'Vencimento'], ['pessoa', 'Cliente / fornecedor'], ['descricao', 'Descrição'], ['valor', 'Valor'], ['aberto', 'Em aberto']];
+  function ordenarTitulos(lista) {
+    const ord = ui.ordTit || { campo: 'vencimento', dir: 1 };
+    const val = t => ({ vencimento: t.vencimento || '9999-12-31', pessoa: (t.pessoaNome || '').toLowerCase(), descricao: (t.descricao || '').toLowerCase(), valor: t.valor || 0, aberto: t.aberto || 0 })[ord.campo];
+    return lista.slice().sort((a, b) => { const x = val(a), y = val(b); return (x < y ? -1 : x > y ? 1 : 0) * ord.dir; });
+  }
+  function barraOrdem() {
+    const ord = ui.ordTit || { campo: 'vencimento', dir: 1 };
+    return '<div class="linha barra-ordem"><label class="campo">Ordenar por <select id="ord-tit">' + CAMPOS_ORDEM.map(([v, r]) => opt(v, r, ord.campo)).join('') + '</select></label><button type="button" class="btn btn-sm" data-act="ord-dir" aria-label="Inverter ordem">' + (ord.dir > 0 ? 'Crescente ↑' : 'Decrescente ↓') + '</button></div>';
+  }
   function tabelaTitulos(lista, o) {
+    lista = ordenarTitulos(lista);
     const tot = lista.reduce((s, t) => ({ valor: s.valor + (t.cancelado ? 0 : t.valor), pago: s.pago + t.pago, aberto: s.aberto + t.aberto }), { valor: 0, pago: 0, aberto: 0 });
     const linhas = lista.map(t => {
       const podeBaixar = t.aberto > 0 && core.can('baixa.registrar');
@@ -3881,6 +3894,7 @@ const WRDCore = (function () {
     'editar-socio': (el, e) => { e.stopPropagation(); formSocio(core.get('movimentosSocios', el.dataset.id)); },
     'cal-nav': a => { const cal = ui.cal, p = +a.dataset.passo; if (p === 0) cal.data = hojeISO(); else if (cal.vista === 'mes') cal.data = Dates.addMonths(cal.data.slice(0, 8) + '01', p); else cal.data = Dates.addDays(cal.data, p * (cal.vista === 'semana' ? 7 : 1)); renderAba(); },
     'cal-vista': a => { ui.cal.vista = a.dataset.vista; renderAba(); },
+    'ord-dir': () => { ui.ordTit = Object.assign({ campo: 'vencimento', dir: 1 }, ui.ordTit); ui.ordTit.dir = -ui.ordTit.dir; renderAba(); },
     'cal-dia': a => { ui.cal.data = a.dataset.dia; ui.cal.vista = 'dia'; renderAba(); },
     'pedir-avisos': async () => { if (typeof Notification === 'undefined') { toast('Este navegador não oferece notificações.', 'erro'); return; } const r = await Notification.requestPermission(); toast(r === 'granted' ? 'Avisos ativados neste aparelho.' : 'Permissão não concedida.', r === 'granted' ? 'ok' : 'erro'); renderAba(); },
     'faturar-titulo': (a) => formFaturar(a.dataset.id),
