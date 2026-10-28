@@ -104,6 +104,36 @@ const MANIFEST = {
   --raio-lg: 10px;
   --sombra: 0 1px 2px rgba(16, 24, 40, .06), 0 1px 3px rgba(16, 24, 40, .08);
   --sombra-lg: 0 12px 32px rgba(16, 24, 40, .18);
+
+/* Calendário da Operação: entregas (azul), atividades (verde), pendências (âmbar); concluídas em cinza; atrasadas em vermelho */
+.cal-barra { display: flex; flex-wrap: wrap; gap: var(--esp-2); align-items: center; justify-content: space-between; margin-bottom: var(--esp-2); }
+.cal-titulo { margin: 0; }
+.cal-bolinha { display: inline-block; width: var(--esp-2); height: var(--esp-2); border-radius: var(--raio-sm); margin-right: var(--esp-1); vertical-align: middle; }
+.cal-bolinha.cal-entrega { background: var(--cor-primaria); }
+.cal-bolinha.cal-atividade { background: var(--ok); }
+.cal-bolinha.cal-pendencia { background: var(--alerta); }
+.cal-grade { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: var(--esp-1); }
+.cal-cab { text-align: center; font-size: var(--fs-xs); font-weight: var(--peso-forte); }
+.cal-celula { display: flex; flex-direction: column; align-items: flex-start; gap: var(--esp-1); min-height: var(--esp-6); padding: var(--esp-1); border: 1px solid var(--n-200); border-radius: var(--raio-sm); background: transparent; text-align: left; cursor: pointer; }
+.cal-celula.fora { opacity: 0.45; }
+.cal-celula.hoje { border-color: var(--cor-primaria); }
+.cal-num { font-weight: var(--peso-forte); }
+.cal-marcas { display: flex; gap: var(--esp-1); }
+.cal-resumo { font-size: var(--fs-xs); }
+.cal-semana { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: var(--esp-1); }
+.cal-coluna { display: flex; flex-direction: column; gap: var(--esp-1); min-width: 0; }
+.cal-cab-btn { border: 0; background: none; font-weight: var(--peso-forte); cursor: pointer; text-align: left; }
+.cal-item { display: flex; flex-direction: column; gap: var(--esp-1); padding: var(--esp-1) var(--esp-2); border-left: 3px solid var(--cor-primaria); border-radius: var(--raio-sm); font-size: var(--fs-xs); }
+.cal-item.atividade { border-left-color: var(--ok); }
+.cal-item.pendencia { border-left-color: var(--alerta); }
+.cal-item.vencida { background: var(--critico-fundo); border-left-color: var(--critico); }
+.cal-item.quitado { opacity: 0.55; }
+@media (max-width: 720px) {
+  .cal-grade { gap: 2px; }
+  .cal-celula { min-height: var(--esp-5); padding: 2px; }
+  .cal-resumo { display: none; }
+  .cal-semana { grid-template-columns: 1fr; }
+}
   --altura-controle: 36px;
   --altura-controle-sm: 30px;
   --altura-controle-lg: 48px;
@@ -2211,6 +2241,29 @@ const WRDOps = (function () {
       pendencias: { identificacao: 'Data de identificação', prazo: 'Prazo (vencimento)' },
       acoes: { inicio: 'Início', termino: 'Término', conclusao: 'Conclusão' }
     };
+    /* Calendário da Operação: entregas previstas, atividades e pendências com prazo, por dia. Concluídas aparecem como concluídas. */
+    function calendarioOperacoes(de, ate) {
+      guard('ler');
+      const h = hoje(), dias = {};
+      const add = (dia, item) => { (dias[dia] = dias[dia] || []).push(item); };
+      servicosVisiveis().forEach(s => {
+        if (!s.prevEntrega || s.prevEntrega < de || s.prevEntrega > ate) return;
+        if (['entregue', 'concluido'].includes(s.etapa)) return;
+        add(s.prevEntrega, { tipo: 'entrega', titulo: s.titulo || s.codigo, cliente: nomeCli(s.clienteId), unidade: nomeUni(s.unidadeId), codigo: s.codigo, concluida: false, vencida: s.prevEntrega < h, servicoId: s.id });
+      });
+      state.atividades.forEach(a => {
+        if (!a.vencimento || a.vencimento < de || a.vencimento > ate) return;
+        const s = byId('servicos', a.servicoId); if (!s || s.arquivado) return;
+        add(a.vencimento, { tipo: 'atividade', titulo: a.titulo || a.codigo, cliente: nomeCli(s.clienteId), unidade: nomeUni(s.unidadeId), codigo: a.codigo, concluida: fechado(a), vencida: !fechado(a) && a.vencimento < h, servicoId: s.id });
+      });
+      state.pendencias.forEach(p => {
+        if (!p.prazo || p.prazo < de || p.prazo > ate) return;
+        const s = byId('servicos', p.servicoId); if (!s || s.arquivado) return;
+        const aberta = PEND_ABERTAS.includes(p.situacao);
+        add(p.prazo, { tipo: 'pendencia', titulo: p.descricao || p.codigo, cliente: nomeCli(s.clienteId), unidade: nomeUni(s.unidadeId), codigo: p.codigo, concluida: !aberta, vencida: aberta && p.prazo < h, servicoId: s.id });
+      });
+      return dias;
+    }
     function listarServicos(f = {}) {
       const h = hoje(), t = norm(f.texto);
       return servicosVisiveis().filter(s => filtroServicoBase(s, f)
@@ -2749,7 +2802,7 @@ const WRDOps = (function () {
       hasUsers, setupAdmin, login, logout, usuariosDemo, entrarDemo, entrarPelaNuvem, user, can, listarUsuarios, salvarUsuario, alterarSenha, equipe,
       config, salvarConfig, tipos, salvarTipo,
       salvarCliente, salvarUnidade, arquivar, clientes, unidades,
-      salvarServico, receberDemanda, moverEtapa, definirCondicao, registrarAceite, listarServicos, servicoDetalhe,
+      salvarServico, receberDemanda, calendarioOperacoes, moverEtapa, definirCondicao, registrarAceite, listarServicos, servicoDetalhe,
       salvarAtividade, comentar, listarAtividades,
       salvarPendencia, resolverPendencia, cancelarPendencia, reabrirPendencia, listarPendencias,
       rascunhoAcaoDePendencia, salvarAcao, listarAcoes, impactoDatas, alterarDatas,
@@ -2906,7 +2959,7 @@ if (typeof module !== 'undefined') module.exports = WRDDemo;
   /* ---------- estado de navegação ---------- */
   const TELAS = [
     ['visao', 'Visão geral'], ['servicos', 'Serviços'], ['atividades', 'Atividades'], ['pendencias', 'Pendências'], ['acoes', 'Planos de ação'],
-    ['cronograma', 'Cronograma'], ['clientes', 'Clientes'], ['relatorios', 'Relatórios'], ['config', 'Configurações']
+    ['cronograma', 'Cronograma'], ['calendario', 'Calendário'], ['clientes', 'Clientes'], ['relatorios', 'Relatórios'], ['config', 'Configurações']
   ];
   const BASE_KEYS = ['clienteId', 'unidadeId', 'servicoId', 'tipoId', 'responsavelId', 'prioridade'];
   const UI = {
@@ -3120,10 +3173,56 @@ if (typeof module !== 'undefined') module.exports = WRDDemo;
       <main id="tela"></main>`;
     renderTela();
   }
+  /* ---------- calendário da Operação: entregas, atividades e pendências com prazo (dia, semana, mês) ---------- */
+  const MESES_OPS = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+  const DIAS_OPS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+  const ROTULO_TIPO = { entrega: 'Entrega', atividade: 'Atividade', pendencia: 'Pendência' };
+  function telaCalendario(el) {
+    const cal = UI.cal = UI.cal || { vista: 'mes', data: D.hojeEm('America/Sao_Paulo', new Date()) };
+    const base = cal.data, hoje = D.hojeEm('America/Sao_Paulo', new Date());
+    let de, ate, titulo;
+    if (cal.vista === 'dia') { de = base; ate = base; titulo = D.fmt(base); }
+    else if (cal.vista === 'semana') { de = D.addDays(base, -new Date(base + 'T00:00:00Z').getUTCDay()); ate = D.addDays(de, 6); titulo = D.fmt(de) + ' a ' + D.fmt(ate); }
+    else {
+      const ini = base.slice(0, 8) + '01', fim = D.fimMes(ini);
+      de = D.addDays(ini, -new Date(ini + 'T00:00:00Z').getUTCDay());
+      ate = D.addDays(fim, 6 - new Date(fim + 'T00:00:00Z').getUTCDay());
+      titulo = MESES_OPS[+ini.slice(5, 7) - 1] + ' de ' + ini.slice(0, 4);
+    }
+    const mapa = core.calendarioOperacoes(de, ate);
+    const item = x => '<div class="cal-item ' + x.tipo + (x.concluida ? ' quitado' : '') + (x.vencida ? ' vencida' : '') + '"><span><b>' + ROTULO_TIPO[x.tipo] + ':</b> ' + esc(x.titulo) + '</span><small>' + esc(x.cliente) + (x.unidade && x.unidade !== x.cliente ? ' · ' + esc(x.unidade) : '') + (x.vencida ? ' · vencida' : '') + (x.concluida ? ' · concluída' : '') + '</small></div>';
+    let corpo = '';
+    if (cal.vista === 'mes') {
+      const celulas = [];
+      for (let dia = de; dia <= ate; dia = D.addDays(dia, 1)) {
+        const itens = mapa[dia] || [];
+        const fora = dia.slice(0, 7) !== base.slice(0, 7);
+        const dica = itens.map(x => ROTULO_TIPO[x.tipo] + ': ' + x.titulo + ' · ' + x.cliente).join('\n');
+        const marca = t => itens.some(x => x.tipo === t && !x.concluida) ? '<span class="cal-bolinha cal-' + t + '"></span>' : '';
+        celulas.push('<button type="button" class="cal-celula' + (fora ? ' fora' : '') + (dia === hoje ? ' hoje' : '') + '" data-act="cal-dia" data-dia="' + dia + '" title="' + esc(dica) + '" aria-label="' + D.fmt(dia) + '"><span class="cal-num">' + (+dia.slice(8, 10)) + '</span><span class="cal-marcas">' + marca('entrega') + marca('atividade') + marca('pendencia') + '</span>' + (itens.length ? '<span class="cal-resumo">' + itens.length + ' item(ns)</span>' : '') + '</button>');
+      }
+      corpo = '<div class="cal-grade">' + DIAS_OPS.map(x => '<div class="cal-cab">' + x + '</div>').join('') + celulas.join('') + '</div>';
+    } else if (cal.vista === 'semana') {
+      const colunas = [];
+      for (let dia = de; dia <= ate; dia = D.addDays(dia, 1)) {
+        const itens = mapa[dia] || [];
+        colunas.push('<div class="cal-coluna' + (dia === hoje ? ' hoje' : '') + '"><button type="button" class="cal-cab-btn" data-act="cal-dia" data-dia="' + dia + '">' + DIAS_OPS[new Date(dia + 'T00:00:00Z').getUTCDay()] + ' ' + (+dia.slice(8, 10)) + '</button>' + itens.map(item).join('') + (itens.length ? '' : '<p class="muted xs">Nada previsto</p>') + '</div>');
+      }
+      corpo = '<div class="cal-semana">' + colunas.join('') + '</div>';
+    } else {
+      const itens = mapa[base] || [];
+      corpo = itens.length ? itens.map(item).join('') : '<p class="muted">Nada previsto neste dia.</p>';
+    }
+    el.innerHTML = '<div class="cab-tela"><h1 class="titulo-tela">Calendário</h1></div>' +
+      '<div class="cal-barra"><div class="linha"><button class="btn btn-sm" data-act="cal-nav" data-passo="-1" aria-label="Anterior">‹</button><button class="btn btn-sm" data-act="cal-nav" data-passo="0">Hoje</button><button class="btn btn-sm" data-act="cal-nav" data-passo="1" aria-label="Próximo">›</button></div>' +
+      '<h2 class="cal-titulo">' + esc(titulo) + '</h2><div class="linha">' + [['dia', 'Dia'], ['semana', 'Semana'], ['mes', 'Mês']].map(([v, r]) => '<button class="btn btn-sm" data-act="cal-vista" data-vista="' + v + '" aria-pressed="' + (cal.vista === v) + '">' + r + '</button>').join('') + '</div></div>' +
+      '<p class="xs muted">Entregas previstas, atividades e pendências com prazo. Concluídas aparecem em cinza; atrasadas, em vermelho.</p>' +
+      corpo;
+  }
   function renderTela() {
     const el = $('#tela'); if (!el) return;
     try {
-      ({ visao: telaVisao, servicos: telaServicos, atividades: telaAtividades, pendencias: telaPendencias, acoes: telaAcoes, cronograma: telaCronograma, clientes: telaClientes, relatorios: telaRelatorios, config: telaConfig })[UI.tela](el);
+      ({ visao: telaVisao, servicos: telaServicos, atividades: telaAtividades, pendencias: telaPendencias, acoes: telaAcoes, cronograma: telaCronograma, calendario: telaCalendario, clientes: telaClientes, relatorios: telaRelatorios, config: telaConfig })[UI.tela](el);
     } catch (e) {
       console.error(e);
       el.innerHTML = `<div class="cartao erro-tela"><h2>Não foi possível carregar esta tela</h2><p>${esc(e.message)}</p></div>`;
@@ -4085,6 +4184,9 @@ if (typeof module !== 'undefined') module.exports = WRDDemo;
       case 'vista': UI.vista = a.dataset.v; salvarNav(); refresh(); break;
       case 'escala': UI.FX.cronograma.escala = a.dataset.v; refresh(); break;
       case 'per-mes': UI.periodo = null; refresh(); break;
+      case 'cal-nav': { const cal = UI.cal, p = +a.dataset.passo; if (p === 0) cal.data = D.hojeEm('America/Sao_Paulo', new Date()); else if (cal.vista === 'mes') cal.data = D.addMonths(cal.data.slice(0, 8) + '01', p); else cal.data = D.addDays(cal.data, p * (cal.vista === 'semana' ? 7 : 1)); refresh(); break; }
+      case 'cal-vista': UI.cal.vista = a.dataset.vista; refresh(); break;
+      case 'cal-dia': UI.cal.data = a.dataset.dia; UI.cal.vista = 'dia'; refresh(); break;
       case 'limpar-filtros': UI.FB = {}; UI.FX[UI.tela] = { cronograma: { escala: UI.FX.cronograma.escala, etapa: 'ativos' } }[UI.tela] || {}; refresh(); break;
       case 'salvar-filtro': { const n = await pedirTexto('Salvar filtro', 'Dê um nome para este conjunto de filtros (fica disponível só para você).', { rotulo: 'Nome do filtro', botao: 'Salvar' }); if (n) { const r = await executar(() => core.salvarFiltro(UI.tela, n, filtrosDe(UI.tela)), {}, 'Filtro salvo.'); if (r.ok) refresh(); } break; }
       case 'remover-salvo': { const s = $('[data-act-sel="aplicar-salvo"]'); if (!s || !s.value) { toast('Escolha o filtro salvo na lista.', 'info'); break; } await executar(() => core.removerFiltro(s.value), {}, 'Filtro excluído.'); refresh(); break; }
