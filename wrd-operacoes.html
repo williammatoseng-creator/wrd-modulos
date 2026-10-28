@@ -614,6 +614,9 @@ table.tab .acoes { text-align: right; white-space: nowrap; }
   .doc-tab th, .doc-tab td, .doc-cab { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
 
+/* Cartão de cliente: contatos e unidades empilhados à esquerda */
+.cli-corpo { grid-template-columns: minmax(0, 1fr); justify-items: start; }
+
 </style>
 </head>
 <body>
@@ -3915,7 +3918,7 @@ if (typeof module !== 'undefined') module.exports = WRDDemo;
           ${core.can('servico.salvar') && !c.arquivado ? `<button class="btn btn-sm" data-act="novo-servico" data-cliente="${c.id}">+ Serviço</button>` : ''}
           <button class="btn btn-sm" data-ir='${esc(JSON.stringify({ tela: 'servicos', filtros: { clienteId: c.id } }))}'>Ver serviços (${c.servicosAtivos} ativos)</button>
           ${core.can('cliente.arquivar') ? `<button class="btn btn-sm${c.arquivado ? '' : ' btn-perigo'}" data-act="${c.arquivado ? 'restaurar' : 'arquivar'}" data-col="clientes" data-id="${c.id}">${c.arquivado ? 'Restaurar' : 'Arquivar'}</button>` : ''}</div></div>
-        <div class="grade g2 peq"><div>${c.email ? `E-mail: ${esc(c.email)}<br>` : ''}${c.telefone ? `Telefone: ${esc(c.telefone)}<br>` : ''}${(c.contatos || []).map(k => `${esc(k.nome)}${k.cargo ? ' — ' + esc(k.cargo) : ''}${k.email ? ' · ' + esc(k.email) : ''}${k.telefone ? ' · ' + esc(k.telefone) : ''}`).join('<br>') || '<span class="muted">Sem contatos.</span>'}${c.obs ? `<p class="muted">${esc(c.obs)}</p>` : ''}</div>
+        <div class="grade peq cli-corpo"><div>${c.email ? `E-mail: ${esc(c.email)}<br>` : ''}${c.telefone ? `Telefone: ${esc(c.telefone)}<br>` : ''}${(c.contatos || []).map(k => `${esc(k.nome)}${k.cargo ? ' — ' + esc(k.cargo) : ''}${k.email ? ' · ' + esc(k.email) : ''}${k.telefone ? ' · ' + esc(k.telefone) : ''}`).join('<br>') || '<span class="muted">Sem contatos.</span>'}${c.obs ? `<p class="muted">${esc(c.obs)}</p>` : ''}</div>
         <div><b>Unidades / locais</b><ul class="lista-uni">${c.unidades.map(u => `<li>${esc(u.nome)}${u.arquivado ? ' <span class="chip">Arquivada</span>' : ''} <span class="muted">${esc([u.endereco, u.cidade, u.uf].filter(Boolean).join(' · '))}</span> ${core.can('cliente.salvar') ? `<button class="btn-link xs" data-act="editar-unidade" data-id="${u.id}" data-cliente="${c.id}">editar</button>` : ''} ${core.can('cliente.arquivar') ? `<button class="btn-link xs" data-act="${u.arquivado ? 'restaurar' : 'arquivar'}" data-col="unidades" data-id="${u.id}">${u.arquivado ? 'restaurar' : 'arquivar'}</button>` : ''}</li>`).join('') || '<li class="muted">Nenhuma unidade.</li>'}</ul></div></div></article>`).join('')}</div>` : '<div class="cartao vazio">Nenhum cliente cadastrado. Comece por “+ Novo cliente”.</div>'}`;
     const box = $('[data-filtros-cli]');
     let tmr;
