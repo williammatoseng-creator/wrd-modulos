@@ -1752,7 +1752,8 @@ const WRDCore = (function () {
       if (t.cancelado) fail('Lançamento cancelado não pode ser editado.');
       const escopo = o.escopo === 'proximos' ? 'proximos' : 'este';
       if (escopo === 'proximos' && !t.recorrenciaId) fail('"Esta e as próximas" vale apenas para despesas recorrentes.');
-      const novo = limparTitulo(Object.assign({}, t, campos, { tipo: t.tipo }));
+      // Receita a faturar recebe data ao ser editada: deixa de ser "a faturar" (a NF continua podendo ser informada depois).
+      const novo = limparTitulo(Object.assign({}, t, campos, { tipo: t.tipo, aFaturar: campos.vencimento ? false : t.aFaturar }));
       validarTitulo(novo, t);
       if (novo.valor < pago(t)) fail(`O valor não pode ser menor que o já ${t.tipo === 'receber' ? 'recebido' : 'pago'} (${Money.fmt(pago(t))}).`);
       if (!o.confirmar && (novo.valor !== t.valor || novo.vencimento !== t.vencimento || novo.pessoaId !== t.pessoaId || novo.notaFiscal !== t.notaFiscal)) verificarDuplicidade(novo, serie(t).map(x => x.id));
@@ -1776,6 +1777,7 @@ const WRDCore = (function () {
           }
           if (alvo !== t && aplicar.valor < pago(alvo)) continue;
           Object.assign(alvo, aplicar, { updatedAt: nowISO() });
+          if (alvo === t) alvo.aFaturar = novo.aFaturar;
           const desc = descreverMudanca(antes, alvo);
           log('titulo.atualizado', 'titulo', alvo.id, `"${alvo.descricao}"${alvo.ocorrencia ? ` (ocorrência ${alvo.ocorrencia})` : alvo.parcela ? ` (parcela ${alvo.parcela}/${alvo.totalParcelas})` : ''}: ${desc || 'sem mudanças'}${escopo === 'proximos' ? ' [esta e as próximas]' : ''}.`);
           queue('financeiro.titulo.atualizado', { id: alvo.id });
@@ -2869,7 +2871,7 @@ const WRDCore = (function () {
         <td data-l="${t.tipo === 'receber' ? 'Recebido' : 'Pago'}" class="num">${t.pago ? R(t.pago) : '—'}</td>
         <td data-l="Em aberto" class="num"><b>${R(t.aberto)}</b></td>
         <td data-l="Situação">${stBadge(t.status, t.statusRotulo)}</td>
-        <td class="acoes no-print">${podeBaixar ? `<button class="btn btn-sm btn-primario" data-act="baixar" data-id="${t.id}">${t.tipo === 'receber' ? 'Receber' : 'Pagar'}</button>` : ''}${t.status === 'a_faturar' && core.can('titulo.editar') ? `<button class="btn btn-sm" data-act="faturar-titulo" data-id="${t.id}">Definir data e NF</button>` : ''}</td>
+        <td class="acoes no-print">${!t.cancelado && core.can('titulo.editar') ? `<button class="btn btn-sm" data-act="editar-titulo" data-id="${t.id}">Editar</button>` : ''}${podeBaixar ? `<button class="btn btn-sm btn-primario" data-act="baixar" data-id="${t.id}">${t.tipo === 'receber' ? 'Receber' : 'Pagar'}</button>` : ''}${t.status === 'a_faturar' && core.can('titulo.editar') ? `<button class="btn btn-sm" data-act="faturar-titulo" data-id="${t.id}">Definir data e NF</button>` : ''}</td>
       </tr>`;
     }).join('');
     const cols = o.mostrarTipo ? 9 : 9;
