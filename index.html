@@ -216,11 +216,6 @@
       </div>
     </section>
 
-    <section class="cartao" style="margin-bottom:14px">
-      <h3>Automações <small>últimas execuções</small></h3>
-      <div id="automacoes"></div>
-    </section>
-
     <section class="grade-modulos" id="modulos"></section>
 
     <div class="rodape">Dados lidos da nuvem WRD Sistemas. O painel só lê; quem altera os dados são os módulos e a fila de revisão.</div>
@@ -373,7 +368,7 @@
     r.funil = ETAPAS.map(e => ({ rotulo: e.rotulo, qtd: 0, valor: 0 })).concat([{ rotulo: 'Outras', qtd: 0, valor: 0 }]);
     let pipeline = 0, ganhas = 0, perdidas = 0, ganhoMes = 0;
     oport.forEach(o => {
-      const rot = etapaDe(o.etapaId), idx = r.funil.findIndex(f => f.rotulo === rot), v = Number(o.valor || 0);
+      const rot = etapaDe(o.etapaId), idx = r.funil.findIndex(f => f.rotulo === rot), v = Number(o.valorAprovado || o.valorEstimado || o.valor || 0);
       r.funil[idx].qtd += 1; r.funil[idx].valor += v;
       if (rot === 'Ganho') { ganhas++; const d = o.ganho && o.ganho.data; if (d && String(d).slice(0, 7) === mes) ganhoMes += Number(o.valorAprovado || v); }
       else if (rot === 'Perdido') perdidas++;
