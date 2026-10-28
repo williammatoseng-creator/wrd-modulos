@@ -623,6 +623,9 @@ table.tab tr.clicavel:hover td { background: var(--cor-primaria-suave); }
 .mapa td.cel { text-align: center; padding: var(--esp-1); }
 .mapa th.cat { writing-mode: vertical-rl; transform: rotate(180deg); white-space: nowrap; font-size: var(--fs-xs); vertical-align: bottom; padding: var(--esp-2) var(--esp-1); }
 .mapa td.uni { white-space: nowrap; }
+.btn-celula { font-family: inherit; margin: 0; cursor: pointer; min-width: 2.6em; }
+.btn-celula:hover { text-decoration: underline; }
+.btn-celula:focus-visible { outline: 2px solid var(--cor-primaria-escura); outline-offset: 2px; }
 .legenda { display: flex; flex-wrap: wrap; gap: var(--esp-2) var(--esp-4); font-size: var(--fs-xs); margin: var(--esp-2) 0; }
 .legenda span { display: inline-flex; gap: var(--esp-1); align-items: center; }
 .bloqueio { white-space: pre-wrap; }
@@ -1731,6 +1734,35 @@ function criarNucleo(opts) {
       state.pendencias.filter(pn => processo(pn.processoId)).map(pn => { const p = processo(pn.processoId), c = cliente(p.clienteId); return [pn.id, c ? c.nome : '', p.codigoUnidade, p.uf, pn.descricao, RESPONSAVEL[pn.responsavel], pn.solicitante, pn.primeiraSolicitacao, pn.ultimaCobranca, pn.prazoAcordado, diasEmAberto(pn), pn.motivo, pn.impacto, pn.situacao, pn.evidenciaResolucao, pn.updatedAt]; }));
   }
   /** Importação idempotente: une por id, mantém o updatedAt mais recente. Usuários não são importados. */
+  /* Demanda aprovada no Comercial e recebida pela Operação (fila da nuvem): cria ou reaproveita o processo da unidade.
+     Não duplica: a referência COM <código> fica registrada no processo. Pedido e valor entram no processo. */
+  function receberDemandaOperacao(item) {
+    guard('processo.salvar');
+    const codigo = txt(item.codigo_oportunidade);
+    if (!codigo) fail('Demanda sem código do Comercial.');
+    if (state.processos.some(p => (p.demandas || []).some(d => d.codigo === codigo))) return { jaRecebida: true };
+    const nomeCli = txt(item.cliente_nome);
+    if (!nomeCli) fail('Demanda sem nome do cliente.');
+    const chaveNome = t => semAcento(t).replace(/\b(ltda|s\.?a\.?|s\/a|me|eireli)\b/g, '').replace(/[^a-z0-9]/g, '');
+    const mesmoCliente = c => { const a = chaveNome(c.nome), b = chaveNome(nomeCli); return a === b || (a.includes('agibank') && b.includes('agibank')); };
+    let cli = state.clientes.find(c => !c.arquivado && mesmoCliente(c));
+    if (!cli) { const id = salvarCliente({ nome: nomeCli }); cli = cliente(id); }
+    const m = /^AGI - (\d{5}) - ([A-Z]{2}) - (.+)$/.exec(txt(item.unidade_nome));
+    const codigoUnidade = m ? m[1] : '';
+    const uf = (m ? m[2] : txt(item.unidade_uf)).toUpperCase();
+    const municipio = m ? m[3].trim() : (txt(item.unidade_cidade) || txt(item.unidade_nome));
+    if (!/^[A-Z]{2}$/.test(uf)) fail('Demanda sem UF da unidade.');
+    const demanda = { codigo, servico: txt(item.servico_nome), valor: Number(item.valor_aprovado || item.valor) || 0, pedido: txt(item.pedido), pedidoMe: txt(item.pedido_me), dataVenda: txt(item.data_venda), recebidaEm: nowISO() };
+    const chave = [semAcento(cli.nome), semAcento(codigoUnidade || 'unica'), uf].join('|');
+    return mut(() => {
+      let p = state.processos.find(x => !x.arquivado && x.chave === chave);
+      if (!p) { const id = salvarProcesso({ clienteId: cli.id, codigoUnidade, uf, municipio, finalidade: 'renovacao', endereco: txt(item.unidade_endereco) }, { confirmarDuplicidade: true }); p = processo(id); }
+      p.demandas = (p.demandas || []).concat([demanda]);
+      toque(p);
+      log('processo.demanda_recebida', 'processo', p, 'Demanda ' + codigo + ' recebida da Operação: ' + demanda.servico + ' · valor ' + demanda.valor + '.');
+      return { id: p.id, jaRecebida: false };
+    }, 'processo.demanda_recebida', r => ({ id: r.id }));
+  }
   function importarJSON(texto, o) {
     guard('usuario.salvar');
     let obj;
@@ -1784,7 +1816,7 @@ function criarNucleo(opts) {
     onEvento: fn => ouvintes.push(fn), salvarAgora, statusSalvamento: () => ({ ultimoSalvo, erro: erroSalvar }),
     user, can, hasUsers, setupAdmin, login, logout, usuariosDemo, entrarDemo, listarUsuarios, salvarUsuario, alterarSenha,
     cliente, listarClientes, salvarCliente,
-    processo, listarProcessos, salvarProcesso, duplicidades, rotuloProcesso, salvarLicenca, normasDaUF, definirEnquadramento, encaminhamentoForaEscopo, salvarChecagens, bloqueiosEtapa, mudarEtapa, arquivarProcesso,
+    processo, listarProcessos, salvarProcesso, receberDemandaOperacao, duplicidades, rotuloProcesso, salvarLicenca, normasDaUF, definirEnquadramento, encaminhamentoForaEscopo, salvarChecagens, bloqueiosEtapa, mudarEtapa, arquivarProcesso,
     documento, docsDo, salvarDocumento, aplicarListaBase, definirAplicabilidade, registrarSolicitacao, registrarRecebimento, avisosValidacao, validarDocumento, pedirCorrecao, marcarPendente, removerDocumento, progresso,
     listarPendencias, salvarPendencia, resolverPendencia, diasEmAberto,
     listarNormas, salvarNorma, arquivarNorma,
@@ -2089,6 +2121,7 @@ if (typeof module !== 'undefined') module.exports = { criarNucleo, adaptadorMemo
   function acaoDoc(a, d) {
     const hoje = hojeISO();
     if (a === 'editar') return modalDocEditar(d.processoId, d.id);
+    if (a === 'ficha') return modalDoc(d.id);
     if (a === 'aplic-sim') return tentar(() => { core.definirAplicabilidade(d.id, 'sim'); renderTela(); });
     if (a === 'aplic-ind') return tentar(() => { core.definirAplicabilidade(d.id, 'indefinido'); renderTela(); });
     if (a === 'aplic-nao') return modalForm('Não se aplica — ' + d.categoria, campo('Justificativa', area('j', '', { rows: 3 }), { req: true, ajuda: 'Por que este item não se aplica a este processo (regra da UF, característica da unidade…).' }), f => core.definirAplicabilidade(d.id, 'nao', fv(f, 'j')));
@@ -2150,11 +2183,14 @@ if (typeof module !== 'undefined') module.exports = { criarNucleo, adaptadorMemo
     cats.sort((a, b) => { const ia = ordem.indexOf(a), ib = ordem.indexOf(b); return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib) || a.localeCompare(b, 'pt-BR'); });
     return cats;
   }
-  function celulaMapa(p, cat) {
+  /* Célula do mapa: na tela (interativa) a sigla é botão que abre a escolha do estado; no PDF é só texto */
+  function celulaMapa(p, cat, interativo) {
     const d = core.docsDo(p.id).find(x => x.categoria === cat);
     if (!d) return '<td class="cel"><span class="muted" title="Não listado neste processo">—</span></td>';
-    if (d.aplicavel === 'indefinido' && d.estado === 'a_solicitar') return `<td class="cel"><span class="st st-ind" title="Aplicabilidade indefinida">IND</span></td>`;
-    const s = ESTADOS_DOC[d.estado]; return `<td class="cel"><span class="st ${s.cls}" title="${esc(s.rot)}${d.motivo ? ' — ' + esc(d.motivo) : ''}">${s.sigla}</span></td>`;
+    const s = d.aplicavel === 'indefinido' && d.estado === 'a_solicitar' ? { cls: 'st-ind', sigla: 'IND', rot: 'Aplicabilidade indefinida' } : ESTADOS_DOC[d.estado];
+    const tit = `${s.rot}${d.motivo ? ' — ' + d.motivo : ''}`;
+    if (!interativo || !podeEditar()) return `<td class="cel"><span class="st ${s.cls}" title="${esc(tit)}">${s.sigla}</span></td>`;
+    return `<td class="cel"><button type="button" class="st ${s.cls} btn-celula" data-act="mapa-doc" data-id="${d.id}" title="${esc(tit)} · clique para mudar o estado">${s.sigla}</button></td>`;
   }
   const legendaHTML = () => `<div class="legenda">${Object.values(ESTADOS_DOC).map(s => `<span><span class="st ${s.cls}">${s.sigla}</span> ${esc(s.rot)}: ${esc(s.desc)}</span>`).join('')}<span><span class="st st-ind">IND</span> Aplicabilidade indefinida (a confirmar na norma da UF).</span><span><span class="muted">—</span> Não listado para a unidade.</span></div>`;
   function telaMapa(el) {
@@ -2162,8 +2198,26 @@ if (typeof module !== 'undefined') module.exports = { criarNucleo, adaptadorMemo
     el.innerHTML = `<div class="cab-tela"><h1>Mapa documental</h1></div><div class="cartao"><div class="filtros" id="filtros-mapa">${campo('Cliente', sel('clienteId', opt('', 'Todos', f.clienteId) + core.listarClientes().map(c => opt(c.id, c.nome, f.clienteId)).join('')))}${campo('UF', sel('uf', optUF(f.uf, 'Todas')))}</div>
       <p class="xs muted">Uma linha por unidade/processo, uma coluna por categoria documental. Base ${esc(core.versaoBase(f.clienteId || null))} · ${dataHoraBR(new Date().toISOString())}.</p><div class="linha"><button class="btn btn-primario" data-act="imprimir-mapa">Imprimir / salvar PDF do mapa</button></div><p class="xs muted">Escolha um cliente no filtro para gerar o PDF. O número é atribuído ao imprimir e fica no histórico de relatórios.</p>${legendaHTML()}
       ${ps.length ? `<div class="tabela-wrap"><table class="tab mapa"><thead><tr><th>Unidade</th><th>Etapa</th><th>Licença</th><th>Progresso</th>${cats.map(c => `<th class="cat">${esc(c)}</th>`).join('')}</tr></thead><tbody>
-      ${ps.map(p => { const pr = core.progresso(p.id); return `<tr class="clicavel" data-act="abrir-proc" data-id="${p.id}"><td class="uni"><b>${esc(core.cliente(p.clienteId).nome)}</b>${p.codigoUnidade ? ' · ' + esc(p.codigoUnidade) : ''}<div class="xs muted">${esc(p.municipio)}/${esc(p.uf)}${p.cnpj ? ' · ' + esc(p.cnpj) : ''}</div></td><td class="xs">${esc(ETAPAS[p.etapa])}</td><td>${chipLic(p)}</td><td class="num">${pr.prontos}/${pr.base}${pr.indefinidos ? `<div class="xs txt-alerta">+${pr.indefinidos} ind.</div>` : ''}</td>${cats.map(c => celulaMapa(p, c)).join('')}</tr>`; }).join('')}</tbody></table></div>` : '<p class="muted">Nenhum processo.</p>'}</div>`;
+      ${ps.map(p => { const pr = core.progresso(p.id); return `<tr class="clicavel" data-act="abrir-proc" data-id="${p.id}"><td class="uni"><b>${esc(core.cliente(p.clienteId).nome)}</b>${p.codigoUnidade ? ' · ' + esc(p.codigoUnidade) : ''}<div class="xs muted">${esc(p.municipio)}/${esc(p.uf)}${p.cnpj ? ' · ' + esc(p.cnpj) : ''}</div></td><td class="xs">${esc(ETAPAS[p.etapa])}</td><td>${chipLic(p)}</td><td class="num">${pr.prontos}/${pr.base}${pr.indefinidos ? `<div class="xs txt-alerta">+${pr.indefinidos} ind.</div>` : ''}</td>${cats.map(c => celulaMapa(p, c, true)).join('')}</tr>`; }).join('')}</tbody></table></div>` : '<p class="muted">Nenhum processo.</p>'}</div>`;
     $('#filtros-mapa').addEventListener('change', e => { UI.fMapa[e.target.name] = e.target.value; renderTela(); });
+  }
+  /* Escolha do estado a partir do mapa: cada opção leva à mesma tela da ficha do documento, que exige os dados do estado */
+  function modalMapaEstado(id) {
+    const d = core.documento(id), p = core.processo(d.processoId);
+    const opcoes = d.aplicavel === 'nao'
+      ? [['aplic-sim', 'Voltar a aplicável', true]]
+      : [
+        ['validar', 'Atendido: conferir e validar', d.estado !== 'validado'],
+        ['solicitar', 'Falta de documentos: registrar cobrança enviada', d.responsavel !== 'wrd' && !['validado', 'em_validacao'].includes(d.estado)],
+        ['receber', 'Recebido / em validação: registrar arquivo', true],
+        ['pendente', 'Pendente: com motivo explícito', d.estado !== 'validado'],
+        ['refazer', 'Refazer / corrigir: motivo e providência', d.estado !== 'validado'],
+        ['aplic-nao', 'Não se aplica: com justificativa', true]
+      ];
+    const m = modal(`${d.categoria} — ${core.rotuloProcesso(p)}`, `<p>${chipAplic(d.aplicavel)} ${chipEstado(d.estado)}</p>
+      <p class="peq muted">Escolha o novo estado. Cada um pede os dados que o módulo exige para ele.</p>
+      <div class="acoes-doc">${opcoes.filter(o => o[2]).map(o => `<button class="btn" data-dact="${o[0]}">${esc(o[1])}</button>`).join('')}<button class="btn btn-link" data-dact="ficha">Ficha completa</button></div>`);
+    m.addEventListener('click', e => { const b = e.target.closest('[data-dact]'); if (!b) return; m.fechar(); acaoDoc(b.dataset.dact, d); });
   }
 
   /* =================================================================== */
@@ -2351,6 +2405,7 @@ if (typeof module !== 'undefined') module.exports = { criarNucleo, adaptadorMemo
       'pen-resp': () => { UI.fPen.responsavel = b.dataset.r; renderTela(); },
       'imprimir-rel': () => imprimirRelatorio(),
       'imprimir-mapa': () => imprimirMapa(),
+      'mapa-doc': () => modalMapaEstado(id),
       'copiar-msg': () => copiar(montarRelatorio(UI.relCli, { interno: UI.relInterno }).msg),
       'copiar-txt': () => copiar(montarRelatorio(UI.relCli, { interno: UI.relInterno }).texto),
       'exp-json': () => baixar(`wrd-ppci-simplificado_${core.demo ? 'DEMO_' : ''}${hojeISO()}.json`, JSON.stringify(core.snapshot(), null, 2), 'application/json'),
