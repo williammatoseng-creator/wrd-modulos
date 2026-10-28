@@ -1302,7 +1302,7 @@ function criarNucleo(opts) {
 
   function normalizar(s) {
     s.schemaVersion = SCHEMA_VERSION; s.criadoEm = s.criadoEm || nowISO();
-    ['usuarios', 'clientes', 'processos', 'documentos', 'pendencias', 'normas', 'relatorios', 'historico', 'falhas'].forEach(k => { s[k] = Array.isArray(s[k]) ? s[k] : []; });
+    ['usuarios', 'clientes', 'processos', 'documentos', 'pendencias', 'normas', 'relatorios', 'modelosMapa', 'historico', 'falhas'].forEach(k => { s[k] = Array.isArray(s[k]) ? s[k] : []; });
     s.config = Object.assign({ seq: {}, inicioRelatorio: 800001, responsavelPadrao: '', integracoes: {} }, s.config || {});
     Object.keys(INTEGRACOES).forEach(k => { s.config.integracoes[k] = s.config.integracoes[k] || { situacao: k === 'drive' || k === 'email' ? 'depende_conexao' : 'depende_dev', obs: '' }; });
     return s;
@@ -1720,6 +1720,29 @@ function criarNucleo(opts) {
     return mut(() => { const r = stamp({ codigo: d.codigo || proximoNumeroRelatorio(), tipo: d.tipo, clienteId: d.clienteId || null, versaoBase: d.versaoBase, processos: d.processos || [], por: u.nome, formato: d.formato || 'pdf' }, 'rel'); state.relatorios.push(r); log('relatorio.gerado', 'relatorio', r, `${r.tipo} ${r.codigo} · base ${r.versaoBase}.`); return r; }, 'relatorio.gerado', r => ({ id: r.id, codigo: r.codigo }));
   }
 
+  /* ---------- modelos de relatório do mapa (colunas, ordem e público escolhidos pela equipe) ---------- */
+  const COLUNAS_INTERNAS_MAPA = ['etapa'];
+  function listarModelosMapa() { guard('ler'); return state.modelosMapa.slice(); }
+  function salvarModeloMapa(d) {
+    const u = guard('relatorio');
+    const nome = txt(d.nome); if (!nome) fail('Dê um nome ao modelo.');
+    if (!['equipe', 'cliente'].includes(d.publico)) fail('Escolha para quem é o relatório: equipe ou cliente.');
+    const colunas = Array.isArray(d.colunas) ? d.colunas.map(String) : [];
+    if (!colunas.length) fail('Escolha ao menos uma coluna.');
+    if (d.publico === 'cliente' && colunas.some(k => COLUNAS_INTERNAS_MAPA.includes(k))) fail('Modelo para o cliente não pode incluir a Etapa (informação interna).');
+    return mut(() => {
+      let m = d.id ? state.modelosMapa.find(x => x.id === d.id) : null;
+      if (m) { Object.assign(m, { nome, publico: d.publico, colunas }); toque(m); }
+      else { m = stamp({ nome, publico: d.publico, colunas, por: u.nome }, 'mod'); state.modelosMapa.push(m); }
+      log('modelo.mapa', 'config', m, `Modelo do mapa: ${m.nome} (${m.publico}).`);
+      return m;
+    }, 'modelo.mapa', m => ({ id: m.id }));
+  }
+  function removerModeloMapa(id) {
+    guard('relatorio'); const i = state.modelosMapa.findIndex(x => x.id === id); if (i < 0) fail('Modelo não encontrado.');
+    return mut(() => { const [m] = state.modelosMapa.splice(i, 1); log('modelo.removido', 'config', m, `Modelo do mapa removido: ${m.nome}.`); }, 'modelo.removido', { id });
+  }
+
   /* ---------- exportação e importação ---------- */
   function snapshot() { guard('exportar'); const s = clone(state); s.usuarios = s.usuarios.map(u => { const c = Object.assign({}, u); delete c.hash; delete c.salt; return c; }); return { modulo: 'wrd-ppci-simplificado', schemaVersion: SCHEMA_VERSION, exportadoEm: nowISO(), demo: !!demo, dados: s }; }
   function csv(cab, linhas) { const e = v => { const s = String(v == null ? '' : v); return /[";\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }; return '﻿' + [cab, ...linhas].map(l => l.map(e).join(';')).join('\r\n'); }
@@ -1771,7 +1794,7 @@ function criarNucleo(opts) {
     if (!!obj.demo !== !!demo) fail(obj.demo ? 'Este arquivo é da demonstração: não é importado nos dados reais.' : 'Este arquivo tem dados reais: não é importado na demonstração.');
     const cont = { novos: 0, atualizados: 0, iguais: 0 };
     mut(() => {
-      ['clientes', 'processos', 'documentos', 'pendencias', 'normas', 'relatorios'].forEach(k => {
+      ['clientes', 'processos', 'documentos', 'pendencias', 'normas', 'relatorios', 'modelosMapa'].forEach(k => {
         (obj.dados[k] || []).forEach(r => {
           if (!r || !r.id) return; const i = state[k].findIndex(x => x.id === r.id);
           if (i < 0) { state[k].push(r); cont.novos++; } else if ((r.updatedAt || '') > (state[k][i].updatedAt || '')) { state[k][i] = r; cont.atualizados++; } else cont.iguais++;
@@ -1822,7 +1845,7 @@ function criarNucleo(opts) {
     listarNormas, salvarNorma, arquivarNorma,
     salvarIntegracao, listarFalhas, reprocessarFalha,
     versaoBase, proximoNumeroRelatorio, registrarRelatorio,
-    snapshot, csvDocumentos, csvPendencias, importarJSON, indicadores,
+    snapshot, csvDocumentos, csvPendencias, importarJSON, indicadores, listarModelosMapa, salvarModeloMapa, removerModeloMapa,
     historico: f => { guard('ler'); return state.historico.filter(h => !f || !f.processoId || h.processoId === f.processoId).slice().reverse(); }
   };
 }
@@ -2193,13 +2216,78 @@ if (typeof module !== 'undefined') module.exports = { criarNucleo, adaptadorMemo
     return `<td class="cel"><button type="button" class="st ${s.cls} btn-celula" data-act="mapa-doc" data-id="${d.id}" title="${esc(tit)} · clique para mudar o estado">${s.sigla}</button></td>`;
   }
   const legendaHTML = () => `<div class="legenda">${Object.values(ESTADOS_DOC).map(s => `<span><span class="st ${s.cls}">${s.sigla}</span> ${esc(s.rot)}: ${esc(s.desc)}</span>`).join('')}<span><span class="st st-ind">IND</span> Aplicabilidade indefinida (a confirmar na norma da UF).</span><span><span class="muted">—</span> Não listado para a unidade.</span></div>`;
+  /* Colunas do mapa: a equipe escolhe quais aparecem, em que ordem e para quem é o relatório (equipe ou cliente) */
+  const COLUNAS_FIXAS_MAPA = [
+    { k: 'unidade', rot: 'Unidade' },
+    { k: 'etapa', rot: 'Etapa', interna: true },
+    { k: 'licenca', rot: 'Licença' },
+    { k: 'progresso', rot: 'Progresso' }
+  ];
+  const PUBLICO_MAPA = { equipe: 'Equipe WRD (uso interno)', cliente: 'Cliente' };
+  function colunasMapa(cats) {
+    const todas = [...COLUNAS_FIXAS_MAPA, ...cats.map(c => ({ k: 'cat:' + c, rot: c }))];
+    const ordem = (UI.mapaOrdem || []).filter(k => todas.some(c => c.k === k));
+    todas.forEach(c => { if (!ordem.includes(c.k)) ordem.push(c.k); });
+    UI.mapaOrdem = ordem;
+    if (!UI.mapaMarcadas) UI.mapaMarcadas = todas.map(c => c.k);
+    return ordem.map(k => todas.find(c => c.k === k)).map(c => Object.assign({}, c, { marcada: UI.mapaMarcadas.includes(c.k) && !(UI.mapaPublico === 'cliente' && c.interna) }));
+  }
+  function celulaColuna(p, c, pdf) {
+    if (c.k === 'unidade') return pdf
+      ? `<td>${esc(p.codigoUnidade || 'Unidade')} — ${esc(p.municipio)}/${esc(p.uf)}${p.cnpj ? `<div>${esc(p.cnpj)}</div>` : ''}</td>`
+      : `<td class="uni"><b>${esc(core.cliente(p.clienteId).nome)}</b>${p.codigoUnidade ? ' · ' + esc(p.codigoUnidade) : ''}<div class="xs muted">${esc(p.municipio)}/${esc(p.uf)}${p.cnpj ? ' · ' + esc(p.cnpj) : ''}</div></td>`;
+    if (c.k === 'etapa') return `<td class="xs">${esc(ETAPAS[p.etapa])}</td>`;
+    if (c.k === 'licenca') return pdf ? `<td>${esc(situacaoLicenca(p).rot)}</td>` : `<td>${chipLic(p)}</td>`;
+    if (c.k === 'progresso') {
+      const pr = core.progresso(p.id);
+      return pdf ? `<td>${pr.prontos} de ${pr.base} prontos${pr.indefinidos ? ` · ${pr.indefinidos} em análise` : ''}</td>`
+        : `<td class="num">${pr.prontos}/${pr.base}${pr.indefinidos ? `<div class="xs txt-alerta">+${pr.indefinidos} ind.</div>` : ''}</td>`;
+    }
+    return celulaMapa(p, c.k.slice(4), !pdf);
+  }
+  function painelColunasMapa(cols) {
+    const cliente = UI.mapaPublico === 'cliente', modelos = core.listarModelosMapa();
+    return `<details class="mais" open><summary>Colunas e modelo do relatório</summary>
+      <div class="filtros"><label class="campo"><span>Para quem é o relatório</span><select data-mapa-publico>${Object.entries(PUBLICO_MAPA).map(([k, r]) => opt(k, r, UI.mapaPublico)).join('')}</select></label></div>
+      <p class="xs muted">Marque as colunas e use as setas para a ordem. ${cliente ? 'Para o cliente, a Etapa é informação interna e não entra.' : ''}</p>
+      <ul class="lista-colunas">${cols.map((c, i) => `<li><label><input type="checkbox" data-mapa-col="${esc(c.k)}" ${c.marcada ? 'checked' : ''} ${cliente && c.interna ? 'disabled' : ''}> ${esc(c.rot)}</label>
+        <button type="button" class="btn btn-sm" data-act="mapa-col-mover" data-k="${esc(c.k)}" data-d="-1" ${i === 0 ? 'disabled' : ''} aria-label="Subir ${esc(c.rot)}">▲</button><button type="button" class="btn btn-sm" data-act="mapa-col-mover" data-k="${esc(c.k)}" data-d="1" ${i === cols.length - 1 ? 'disabled' : ''} aria-label="Descer ${esc(c.rot)}">▼</button></li>`).join('')}</ul>
+      <div class="linha"><button type="button" class="btn btn-primario" data-act="mapa-modelo-salvar">Salvar como modelo…</button></div>
+      ${modelos.length ? `<h3>Modelos salvos</h3><ul class="lista-colunas">${modelos.map(m => `<li><b>${esc(m.nome)}</b> · ${esc(PUBLICO_MAPA[m.publico])} · ${m.colunas.length} coluna(s) <button type="button" class="btn btn-sm" data-act="mapa-modelo-aplicar" data-id="${m.id}">Aplicar</button> <button type="button" class="btn btn-sm btn-perigo" data-act="mapa-modelo-excluir" data-id="${m.id}">Excluir</button></li>`).join('')}</ul>` : '<p class="xs muted">Nenhum modelo salvo ainda.</p>'}
+    </details>`;
+  }
   function telaMapa(el) {
     const f = UI.fMapa, ps = core.listarProcessos({ clienteId: f.clienteId, uf: f.uf }), cats = dadosMapa(ps);
+    if (!UI.mapaPublico) UI.mapaPublico = 'equipe';
+    const cols = colunasMapa(cats), visiveis = cols.filter(c => c.marcada);
+    const tabela = !ps.length ? '<p class="muted">Nenhum processo.</p>' : !visiveis.length ? '<p class="muted">Marque ao menos uma coluna.</p>' : `<div class="tabela-wrap"><table class="tab mapa"><thead><tr>${visiveis.map(c => `<th${c.k.startsWith('cat:') ? ' class="cat"' : ''}>${esc(c.rot)}</th>`).join('')}</tr></thead><tbody>
+      ${ps.map(p => `<tr class="clicavel" data-act="abrir-proc" data-id="${p.id}">${visiveis.map(c => celulaColuna(p, c, false)).join('')}</tr>`).join('')}</tbody></table></div>`;
     el.innerHTML = `<div class="cab-tela"><h1>Mapa documental</h1></div><div class="cartao"><div class="filtros" id="filtros-mapa">${campo('Cliente', sel('clienteId', opt('', 'Todos', f.clienteId) + core.listarClientes().map(c => opt(c.id, c.nome, f.clienteId)).join('')))}${campo('UF', sel('uf', optUF(f.uf, 'Todas')))}</div>
-      <p class="xs muted">Uma linha por unidade/processo, uma coluna por categoria documental. Base ${esc(core.versaoBase(f.clienteId || null))} · ${dataHoraBR(new Date().toISOString())}.</p><div class="linha"><button class="btn btn-primario" data-act="imprimir-mapa">Imprimir / salvar PDF do mapa</button></div><p class="xs muted">Escolha um cliente no filtro para gerar o PDF. O número é atribuído ao imprimir e fica no histórico de relatórios.</p>${legendaHTML()}
-      ${ps.length ? `<div class="tabela-wrap"><table class="tab mapa"><thead><tr><th>Unidade</th><th>Etapa</th><th>Licença</th><th>Progresso</th>${cats.map(c => `<th class="cat">${esc(c)}</th>`).join('')}</tr></thead><tbody>
-      ${ps.map(p => { const pr = core.progresso(p.id); return `<tr class="clicavel" data-act="abrir-proc" data-id="${p.id}"><td class="uni"><b>${esc(core.cliente(p.clienteId).nome)}</b>${p.codigoUnidade ? ' · ' + esc(p.codigoUnidade) : ''}<div class="xs muted">${esc(p.municipio)}/${esc(p.uf)}${p.cnpj ? ' · ' + esc(p.cnpj) : ''}</div></td><td class="xs">${esc(ETAPAS[p.etapa])}</td><td>${chipLic(p)}</td><td class="num">${pr.prontos}/${pr.base}${pr.indefinidos ? `<div class="xs txt-alerta">+${pr.indefinidos} ind.</div>` : ''}</td>${cats.map(c => celulaMapa(p, c, true)).join('')}</tr>`; }).join('')}</tbody></table></div>` : '<p class="muted">Nenhum processo.</p>'}</div>`;
+      <p class="xs muted">Uma linha por unidade/processo. ${visiveis.length} de ${cols.length} coluna(s), na ordem do relatório. Base ${esc(core.versaoBase(f.clienteId || null))} · ${dataHoraBR(new Date().toISOString())}.</p><div class="linha"><button class="btn btn-primario" data-act="imprimir-mapa">Imprimir / salvar PDF do mapa</button></div><p class="xs muted">Escolha um cliente no filtro para gerar o PDF. O número é atribuído ao imprimir e fica no histórico de relatórios.</p>
+      <div id="painel-colunas">${painelColunasMapa(cols)}</div>${legendaHTML()}
+      ${tabela}</div>`;
     $('#filtros-mapa').addEventListener('change', e => { UI.fMapa[e.target.name] = e.target.value; renderTela(); });
+    $('#painel-colunas').addEventListener('change', e => {
+      if (e.target.dataset.mapaPublico !== undefined) { UI.mapaPublico = e.target.value; return renderTela(); }
+      const k = e.target.dataset.mapaCol; if (k === undefined) return;
+      UI.mapaMarcadas = e.target.checked ? [...new Set([...UI.mapaMarcadas, k])] : UI.mapaMarcadas.filter(x => x !== k);
+      renderTela();
+    });
+  }
+  function moverColunaMapa(k, d) {
+    const o = UI.mapaOrdem.slice(), i = o.indexOf(k), j = i + d;
+    if (i < 0 || j < 0 || j >= o.length) return;
+    [o[i], o[j]] = [o[j], o[i]]; UI.mapaOrdem = o; renderTela();
+  }
+  function modalSalvarModeloMapa() {
+    const cols = colunasMapa(dadosMapa(core.listarProcessos({ clienteId: UI.fMapa.clienteId, uf: UI.fMapa.uf })));
+    modalForm('Salvar modelo de relatório', `${campo('Nome do modelo', inp('nome', ''), { req: true, ajuda: 'Ex.: Equipe — completo; Cliente — só o que o cliente precisa ver.' })}
+      ${campo('Para quem é o relatório', `<select name="publico">${Object.entries(PUBLICO_MAPA).map(([k, r]) => opt(k, r, UI.mapaPublico)).join('')}</select>`)}`,
+      f => core.salvarModeloMapa({ nome: fv(f, 'nome'), publico: fv(f, 'publico'), colunas: cols.filter(c => c.marcada).map(c => c.k) }), { ok: 'Salvar modelo' });
+  }
+  function aplicarModeloMapa(id) {
+    const m = core.listarModelosMapa().find(x => x.id === id); if (!m) return toast('Modelo não encontrado.', 'erro');
+    UI.mapaOrdem = m.colunas.slice(); UI.mapaMarcadas = m.colunas.slice(); UI.mapaPublico = m.publico; renderTela();
   }
   /* Escolha do estado a partir do mapa: cada opção leva à mesma tela da ficha do documento, que exige os dados do estado */
   function modalMapaEstado(id) {
@@ -2223,16 +2311,17 @@ if (typeof module !== 'undefined') module.exports = { criarNucleo, adaptadorMemo
   /* =================================================================== */
   /* RELATÓRIO DE PENDÊNCIAS PARA O CLIENTE                               */
   /* =================================================================== */
-  /* PDF do mapa documental: o mesmo quadro da tela Mapa (uma linha por unidade, uma coluna por categoria), em A4 paisagem */
+  /* PDF do mapa documental: as colunas escolhidas na tela, na mesma ordem, em A4 paisagem */
   function montarMapaPDF(f, codigo) {
     const c = f.clienteId ? core.cliente(f.clienteId) : null, u = core.user(), agora = new Date().toISOString();
     const ps = core.listarProcessos({ clienteId: f.clienteId, uf: f.uf }), cats = dadosMapa(ps), base = core.versaoBase(f.clienteId || null);
+    const visiveis = colunasMapa(cats).filter(x => x.marcada);
     const cab = `WRD SOLUÇÕES · Mapa documental${c ? ' · ' + c.nome : ''}`;
     const html = `<style>@page paisagem { @top-left { content: "${cab.replace(/"/g, "'")}"; } @top-right { content: "${dataHoraBR(agora).replace(/"/g, "'")}"; } @bottom-left { content: "Base ${base} · Responsável: ${u.nome.replace(/"/g, "'")}"; } @bottom-right { content: "Página " counter(page) " de " counter(pages); } }</style>
     <div class="doc doc-lic"><div class="doc-cab"><img src="${LOGO_AZUL}" alt="WRD Soluções"><div><div class="doc-tit">Mapa documental</div>
-      <div class="doc-meta">WRD SOLUÇÕES · Licenciamento simplificado do Corpo de Bombeiros<br>Nº <b>${esc(codigo)}</b> · Cliente: <b>${esc(c ? c.nome : 'Todos os clientes')}</b>${f.uf ? ' · UF ' + esc(f.uf) : ''} · Emitido em ${dataHoraBR(agora)} · Versão da base: <b>${base}</b><br>Responsável: ${esc(u.nome)}</div></div></div>
-      <p class="xs">Uma linha por unidade/processo, uma coluna por categoria documental. Progresso = prontos (validados + N/A) sobre o total.</p>
-      <table class="rel-tab mapa"><thead><tr><th>Unidade</th><th>Etapa</th><th>Situação da licença</th><th>Progresso documental</th>${cats.map(x => `<th class="cat">${esc(x)}</th>`).join('')}</tr></thead><tbody>${ps.map(p => { const pr = core.progresso(p.id); return `<tr><td>${esc(p.codigoUnidade || 'Unidade')} — ${esc(p.municipio)}/${esc(p.uf)}${p.cnpj ? `<div>${esc(p.cnpj)}</div>` : ''}</td><td>${esc(ETAPAS[p.etapa])}</td><td>${esc(situacaoLicenca(p).rot)}</td><td>${pr.prontos} de ${pr.base} prontos${pr.indefinidos ? ` · ${pr.indefinidos} em análise` : ''}</td>${cats.map(x => celulaMapa(p, x)).join('')}</tr>`; }).join('')}</tbody></table>
+      <div class="doc-meta">WRD SOLUÇÕES · Licenciamento simplificado do Corpo de Bombeiros<br>Nº <b>${esc(codigo)}</b> · Cliente: <b>${esc(c ? c.nome : 'Todos os clientes')}</b>${f.uf ? ' · UF ' + esc(f.uf) : ''} · Emitido em ${dataHoraBR(agora)} · Versão da base: <b>${base}</b><br>Para: <b>${esc(PUBLICO_MAPA[UI.mapaPublico || 'equipe'])}</b> · Responsável: ${esc(u.nome)}</div></div></div>
+      <p class="xs">Uma linha por unidade/processo. Progresso = prontos (validados + N/A) sobre o total.</p>
+      <table class="rel-tab mapa"><thead><tr>${visiveis.map(c => `<th${c.k.startsWith('cat:') ? ' class="cat"' : ''}>${esc(c.rot)}</th>`).join('')}</tr></thead><tbody>${ps.map(p => `<tr>${visiveis.map(c => celulaColuna(p, c, true)).join('')}</tr>`).join('')}</tbody></table>
       <h3>Legenda</h3>${legendaHTML()}
       <div class="doc-rodape">WRD Soluções · ${esc(codigo)} · ${dataHoraBR(agora)} · base ${base}</div></div>`;
     return { html, base, processos: ps.map(p => p.id) };
@@ -2406,6 +2495,10 @@ if (typeof module !== 'undefined') module.exports = { criarNucleo, adaptadorMemo
       'imprimir-rel': () => imprimirRelatorio(),
       'imprimir-mapa': () => imprimirMapa(),
       'mapa-doc': () => modalMapaEstado(id),
+      'mapa-col-mover': () => moverColunaMapa(b.dataset.k, Number(b.dataset.d)),
+      'mapa-modelo-salvar': () => modalSalvarModeloMapa(),
+      'mapa-modelo-aplicar': () => aplicarModeloMapa(id),
+      'mapa-modelo-excluir': async () => { if (await confirmar('Excluir modelo', 'O modelo sai da lista. Relatórios já impressos não mudam.', 'Excluir')) tentar(() => { core.removerModeloMapa(id); renderTela(); }); },
       'copiar-msg': () => copiar(montarRelatorio(UI.relCli, { interno: UI.relInterno }).msg),
       'copiar-txt': () => copiar(montarRelatorio(UI.relCli, { interno: UI.relInterno }).texto),
       'exp-json': () => baixar(`wrd-ppci-simplificado_${core.demo ? 'DEMO_' : ''}${hojeISO()}.json`, JSON.stringify(core.snapshot(), null, 2), 'application/json'),
