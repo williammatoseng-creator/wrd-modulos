@@ -3109,7 +3109,7 @@ if (typeof module !== 'undefined') module.exports = WRDDemo;
       if (r.ok) { m.fechar(); if (aoSalvar) aoSalvar(r.r.id); else refrescar(); }
     };
   }
-  function formUnidade(clienteId, u) {
+  function formUnidade(clienteId, u, aoSalvar) {
     u = u || {};
     const m = modal(u.id ? 'Editar unidade' : 'Nova unidade / local de atendimento', `<form class="grade g2">
       <label class="campo span2"><span>Nome <span class="req">*</span></span><input name="nome" required value="${esc(u.nome)}"></label>
@@ -3117,7 +3117,7 @@ if (typeof module !== 'undefined') module.exports = WRDDemo;
       <label class="campo">Cidade<input name="cidade" value="${esc(u.cidade)}"></label><label class="campo">Estado<select name="uf">${opcoes(core.UFS.map(x => [x, x]), u.uf, '—')}</select></label>
       <label class="campo">CNPJ da unidade<input name="cnpj" value="${esc(u.cnpj)}"></label><label class="campo">Observações<input name="obs" value="${esc(u.obs)}"></label>
       <div class="linha fim span2"><button type="button" class="btn" data-fechar>Cancelar</button><button class="btn btn-primario">Salvar</button></div></form>`);
-    $('form', m.el).onsubmit = async e => { e.preventDefault(); const r = await executar(() => core.salvarUnidade(Object.assign({ id: u.id, clienteId }, dadosForm(e.target))), {}, 'Unidade salva.'); if (r.ok) { m.fechar(); refrescar(); } };
+    $('form', m.el).onsubmit = async e => { e.preventDefault(); const r = await executar(() => core.salvarUnidade(Object.assign({ id: u.id, clienteId }, dadosForm(e.target))), {}, 'Unidade salva.'); if (r.ok) { m.fechar(); if (aoSalvar) aoSalvar(r.r.id); else refrescar(); } };
   }
   function formContato(clienteId, k, aoSalvar) {
     k = k || {};
@@ -3145,7 +3145,7 @@ if (typeof module !== 'undefined') module.exports = WRDDemo;
     const m = modal(novo ? 'Nova oportunidade' : `Editar ${o.codigo}`, `<form class="grade g2" novalidate>
       <p class="ajuda span2">Cadastro progressivo: só a empresa é obrigatória. Sem serviço, responsável ou próxima ação, a oportunidade fica como <b>rascunho</b> e aparece sinalizada.</p>
       <div class="campo span2"><label for="op-cli">Empresa <span class="req">*</span></label><div class="linha"><select id="op-cli" name="clienteId" required class="cresce" ${novo ? '' : 'disabled'}>${optClientes(x.clienteId, 'Selecione…')}</select>${novo ? '<button type="button" class="btn btn-sm" data-novo-cli>+ Nova empresa</button>' : ''}</div></div>
-      <label class="campo">Unidade<select name="unidadeId"></select></label>
+      <div class="campo"><label for="op-un">Unidade</label><div class="linha"><select id="op-un" name="unidadeId" class="cresce"></select><button type="button" class="btn btn-sm" data-nova-un>+ Unidade</button></div></div>
       <div class="campo"><label for="op-ct">Contato</label><div class="linha"><select id="op-ct" name="contatoId" class="cresce"></select><button type="button" class="btn btn-sm" data-novo-ct>+ Contato</button></div></div>
       <label class="campo span2">Título <span class="ajuda">se vazio, usa serviço — empresa</span><input name="titulo" value="${esc(x.titulo)}"></label>
       <label class="campo">Serviço<select name="servicoId">${optServicos(x.servicoId, '—')}</select></label>
@@ -3169,6 +3169,7 @@ if (typeof module !== 'undefined') module.exports = WRDDemo;
     f.clienteId.addEventListener('change', () => selectsDoCliente(f, f.clienteId.value));
     const bc = $('[data-novo-cli]', f); if (bc) bc.onclick = () => formCliente(null, id => { f.clienteId.innerHTML = optClientes(id, 'Selecione…'); selectsDoCliente(f, id); });
     $('[data-novo-ct]', f).onclick = () => { if (!f.clienteId.value) { toast('Escolha a empresa primeiro.', 'erro'); return; } formContato(f.clienteId.value, null, id => selectsDoCliente(f, f.clienteId.value, { contatoId: id, unidadeId: f.unidadeId.value })); };
+    $('[data-nova-un]', f).onclick = () => { if (!f.clienteId.value) { toast('Escolha a empresa primeiro.', 'erro'); return; } formUnidade(f.clienteId.value, null, id => selectsDoCliente(f, f.clienteId.value, { unidadeId: id, contatoId: f.contatoId.value })); };
     f.onsubmit = async e => {
       e.preventDefault(); const d = dadosForm(f);
       const dados = Object.assign({ id: o.id, clienteId: f.clienteId.value, vencimentoId: pre.vencimentoId }, d, { anexos: ANX.op, proximaAcao: { tipo: d.pa_tipo, descricao: d.pa_descricao, prazo: d.pa_prazo, hora: d.pa_hora } });
