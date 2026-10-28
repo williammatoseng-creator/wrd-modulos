@@ -4184,7 +4184,7 @@ if (typeof module !== 'undefined') module.exports = WRDDemo;
       case 'vista': UI.vista = a.dataset.v; salvarNav(); refresh(); break;
       case 'escala': UI.FX.cronograma.escala = a.dataset.v; refresh(); break;
       case 'per-mes': UI.periodo = null; refresh(); break;
-      case 'cal-nav': { const cal = UI.cal, p = +a.dataset.passo; if (p === 0) cal.data = D.hojeEm('America/Sao_Paulo', new Date()); else if (cal.vista === 'mes') cal.data = D.addMonths(cal.data.slice(0, 8) + '01', p); else cal.data = D.addDays(cal.data, p * (cal.vista === 'semana' ? 7 : 1)); refresh(); break; }
+      case 'cal-nav': { const cal = UI.cal, p = +a.dataset.passo; if (p === 0) cal.data = D.hojeEm('America/Sao_Paulo', new Date()); else if (cal.vista === 'mes') { const [y, m] = cal.data.split('-').map(Number); cal.data = new Date(Date.UTC(y, m - 1 + p, 1)).toISOString().slice(0, 10); } else cal.data = D.addDays(cal.data, p * (cal.vista === 'semana' ? 7 : 1)); refresh(); break; }
       case 'cal-vista': UI.cal.vista = a.dataset.vista; refresh(); break;
       case 'cal-dia': UI.cal.data = a.dataset.dia; UI.cal.vista = 'dia'; refresh(); break;
       case 'limpar-filtros': UI.FB = {}; UI.FX[UI.tela] = { cronograma: { escala: UI.FX.cronograma.escala, etapa: 'ativos' } }[UI.tela] || {}; refresh(); break;
