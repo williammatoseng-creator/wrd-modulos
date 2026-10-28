@@ -491,7 +491,7 @@ dl.info dd { margin: 0; }
 
 /* Calendário (Financeiro): receitas em verde, despesas em vermelho, por dia */
 .cal-barra { display: flex; flex-wrap: wrap; gap: var(--esp-2); align-items: center; justify-content: space-between; margin-bottom: var(--esp-2); }
-.cal-titulo { margin: 0; text-transform: capitalize; }
+.cal-titulo { margin: 0; }
 .cal-soma { display: flex; flex-wrap: wrap; gap: var(--esp-2); align-items: center; }
 .cal-bolinha { display: inline-block; width: var(--esp-2); height: var(--esp-2); border-radius: var(--raio-pilula); margin-right: var(--esp-1); vertical-align: middle; }
 .cal-grade { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: var(--esp-1); }
@@ -3201,7 +3201,8 @@ const WRDCore = (function () {
       for (let dia = de; dia <= ate; dia = Dates.addDays(dia, 1)) {
         const d = dias[dia] || { receber: [], pagar: [], totais: { receber: 0, pagar: 0 } };
         const fora = dia.slice(0, 7) !== base.slice(0, 7);
-        celulas.push(`<button type="button" class="cal-celula${fora ? ' fora' : ''}${dia === hoje ? ' hoje' : ''}" data-act="cal-dia" data-dia="${dia}" aria-label="${D(dia)}">
+        const dica = [...d.receber.map(x => 'Receber: ' + x.descricao + (x.pessoaNome ? ' · ' + x.pessoaNome : '') + ' · ' + R(x.aberto)), ...d.pagar.map(x => 'Pagar: ' + x.descricao + (x.pessoaNome ? ' · ' + x.pessoaNome : '') + ' · ' + R(x.aberto))].join('\n');
+        celulas.push(`<button type="button" class="cal-celula${fora ? ' fora' : ''}${dia === hoje ? ' hoje' : ''}" data-act="cal-dia" data-dia="${dia}" title="${esc(dica)}" aria-label="${D(dia)}${dica ? '. ' + esc(dica) : ''}">
           <span class="cal-num">${+dia.slice(8, 10)}</span>
           <span class="cal-marcas">${d.receber.length ? bolinha('ok') : ''}${d.pagar.length ? bolinha('critico') : ''}</span>
           ${d.receber.length || d.pagar.length ? `<span class="cal-resumo">${d.totais.receber ? '+' + R(d.totais.receber) : ''}${d.totais.pagar ? ' −' + R(d.totais.pagar) : ''}</span>` : ''}</button>`);
