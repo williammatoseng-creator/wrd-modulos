@@ -489,6 +489,37 @@ dl.info dd { margin: 0; }
 .prime-uso.acima span:last-child { color: var(--critico); font-weight: var(--peso-forte); }
 .prime-val { text-align: left; }
 
+/* Calendário (Financeiro): receitas em verde, despesas em vermelho, por dia */
+.cal-barra { display: flex; flex-wrap: wrap; gap: var(--esp-2); align-items: center; justify-content: space-between; margin-bottom: var(--esp-2); }
+.cal-titulo { margin: 0; text-transform: capitalize; }
+.cal-soma { display: flex; flex-wrap: wrap; gap: var(--esp-2); align-items: center; }
+.cal-bolinha { display: inline-block; width: var(--esp-2); height: var(--esp-2); border-radius: var(--raio-pilula); margin-right: var(--esp-1); vertical-align: middle; }
+.cal-grade { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: var(--esp-1); }
+.cal-cab { text-align: center; font-size: var(--fs-xs); font-weight: var(--peso-forte); color: var(--n-500); }
+.cal-celula { display: flex; flex-direction: column; align-items: flex-start; gap: var(--esp-1); min-height: var(--altura-controle-lg); padding: var(--esp-1); border: var(--borda) solid var(--n-200); border-radius: var(--raio-sm); background: var(--n-0); text-align: left; cursor: pointer; }
+.cal-celula.fora { opacity: var(--op-desabilitado); }
+.cal-celula.hoje { border-color: var(--cor-primaria); }
+.cal-num { font-weight: var(--peso-forte); }
+.cal-marcas { display: flex; gap: var(--esp-1); }
+.cal-resumo { font-size: var(--fs-2xs); color: var(--n-700); overflow-wrap: anywhere; }
+.cal-semana { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: var(--esp-1); }
+.cal-coluna { display: flex; flex-direction: column; gap: var(--esp-1); min-width: 0; }
+.cal-cab-btn { border: 0; background: none; font-weight: var(--peso-forte); cursor: pointer; text-align: left; }
+.cal-coluna.hoje .cal-cab-btn { color: var(--cor-primaria); }
+.cal-item { display: flex; flex-direction: column; gap: var(--esp-1); padding: var(--esp-1) var(--esp-2); border-left: var(--borda-forte) solid var(--ok); border-radius: var(--raio-sm); background: var(--ok-fundo); font-size: var(--fs-xs); }
+.cal-item.pagar { border-left-color: var(--critico); background: var(--critico-fundo); }
+.cal-item.quitado { opacity: var(--op-inativo); }
+.cal-item em { font-style: normal; color: var(--n-500); }
+@media (max-width: 720px) {
+  .cal-grade { gap: var(--esp-0); }
+  .cal-celula { min-height: var(--altura-controle); padding: var(--esp-0); }
+  .cal-resumo { display: none; }
+  .cal-semana { grid-template-columns: 1fr; }
+}
+
+.cal-bolinha.cal-ok { background: var(--ok); }
+.cal-bolinha.cal-critico { background: var(--critico); }
+
 </style>
 </head>
 <body>
@@ -2026,6 +2057,18 @@ const WRDCore = (function () {
       guard('ler');
       return filtrarTitulos(f).sort((a, b) => (a.vencimento || '9999-12-31').localeCompare(b.vencimento || '9999-12-31') || ordem(a) - ordem(b)).map(enriquecer);
     }
+    /* Calendário: lançamentos com vencimento no período, por dia. Receber e pagar separados; totais = o que ainda está em aberto. */
+    function calendarioPeriodo(de, ate) {
+      guard('ler');
+      const dias = {};
+      listarTitulos({}).forEach(t => {
+        if (t.cancelado || !t.vencimento || t.vencimento < de || t.vencimento > ate) return;
+        const d = dias[t.vencimento] || (dias[t.vencimento] = { receber: [], pagar: [], totais: { receber: 0, pagar: 0 } });
+        d[t.tipo].push({ id: t.id, descricao: t.descricao, pessoaNome: t.pessoaNome, valor: t.valor, aberto: t.aberto, quitado: t.aberto <= 0, serieRotulo: t.serieRotulo });
+        if (t.aberto > 0) d.totais[t.tipo] += t.aberto;
+      });
+      return dias;
+    }
     function titulo(id) { guard('ler'); const t = byId('titulos', id); return t ? enriquecer(t) : null; }
     function baixasDoTitulo(id) {
       guard('ler');
@@ -2346,7 +2389,7 @@ const WRDCore = (function () {
       hasUsers, setupAdmin, login, logout, usuariosDemo, entrarDemo, entrarPelaNuvem, user, can, listarUsuarios, salvarUsuario, alterarSenha,
       salvarConfig, config, emitirNumeroRelatorio,
       salvarPessoa, salvarProjeto, salvarCategoria, salvarConta,
-      criarTitulo, criarLote, receberDemandaComercial, editarTitulo, cancelarTitulo, registrarBaixa, estornarBaixa,
+      criarTitulo, criarLote, calendarioPeriodo, receberDemandaComercial, editarTitulo, cancelarTitulo, registrarBaixa, estornarBaixa,
       criarTransferencia, estornarTransferencia, editarTransferencia, criarMovSocio, estornarMovSocio, editarMovSocio,
       lista, get, titulo, listarTitulos, baixasDoTitulo, serieDe, movimentos, saldoConta: (id, ate) => { guard('ler'); return saldoConta(id, ate); }, saldos,
       kpis, projecao, fluxoMensal, porCategoria, resultadoDireto, inadimplencia, resumoMensal, historico,
@@ -2575,7 +2618,7 @@ const WRDCore = (function () {
 
   const ABAS = [
     ['visao', 'Visão geral'], ['receber', 'Contas a receber'], ['pagar', 'Contas a pagar'],
-    ['fluxo', 'Fluxo de caixa'], ['cadastros', 'Clientes e fornecedores'], ['relatorios', 'Relatórios e configurações']
+    ['fluxo', 'Fluxo de caixa'], ['calendario', 'Calendário'], ['cadastros', 'Clientes e fornecedores'], ['relatorios', 'Relatórios e configurações']
   ];
 
   /* =================================================================
@@ -2614,7 +2657,7 @@ const WRDCore = (function () {
   function renderAba() {
     const c = $('#conteudo'); if (!c) return;
     try {
-      ({ visao: telaVisao, receber: () => telaTitulos('receber'), pagar: () => telaTitulos('pagar'), fluxo: telaFluxo, cadastros: telaCadastros, relatorios: telaRelatorios }[ui.aba] || telaVisao)(c);
+      ({ visao: telaVisao, receber: () => telaTitulos('receber'), pagar: () => telaTitulos('pagar'), fluxo: telaFluxo, calendario: telaCalendario, cadastros: telaCadastros, relatorios: telaRelatorios }[ui.aba] || telaVisao)(c);
     } catch (e) {
       console.error(e);
       c.innerHTML = `<div class="aviso aviso-critico">Erro ao montar a tela: ${esc(e.message)}</div>`;
@@ -3133,6 +3176,58 @@ const WRDCore = (function () {
   /* =================================================================
      FLUXO DE CAIXA
      ================================================================= */
+  /* ---------- calendário: receitas (verde) e despesas (vermelho) por dia, em visão diária, semanal ou mensal ---------- */
+  const MESES_CAL = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+  const DIAS_CAL = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+  function telaCalendario(c) {
+    const cal = ui.cal = ui.cal || { vista: 'mes', data: hojeISO() };
+    const base = cal.data, hoje = hojeISO();
+    let de, ate, titulo;
+    if (cal.vista === 'dia') { de = base; ate = base; titulo = D(base); }
+    else if (cal.vista === 'semana') { de = Dates.addDays(base, -new Date(base + 'T00:00:00Z').getUTCDay()); ate = Dates.addDays(de, 6); titulo = D(de) + ' a ' + D(ate); }
+    else {
+      const ini = base.slice(0, 8) + '01', fim = Dates.fimMes(ini);
+      de = Dates.addDays(ini, -new Date(ini + 'T00:00:00Z').getUTCDay());
+      ate = Dates.addDays(fim, 6 - new Date(fim + 'T00:00:00Z').getUTCDay());
+      titulo = MESES_CAL[+ini.slice(5, 7) - 1] + ' de ' + ini.slice(0, 4);
+    }
+    const dias = core.calendarioPeriodo(de, ate);
+    const soma = k => Object.values(dias).reduce((s, d) => s + d.totais[k], 0);
+    const bolinha = cor => `<span class="cal-bolinha cal-${cor}"></span>`;
+    const item = (x, tipo) => `<div class="cal-item ${tipo}${x.quitado ? ' quitado' : ''}"><span>${esc(x.descricao)}${x.pessoaNome ? ' · ' + esc(x.pessoaNome) : ''}${x.serieRotulo ? ' (' + esc(x.serieRotulo) + ')' : ''}</span><b>${R(x.quitado ? x.valor : x.aberto)}</b>${x.quitado ? '<em>baixado</em>' : ''}</div>`;
+    let corpo = '';
+    if (cal.vista === 'mes') {
+      const celulas = [];
+      for (let dia = de; dia <= ate; dia = Dates.addDays(dia, 1)) {
+        const d = dias[dia] || { receber: [], pagar: [], totais: { receber: 0, pagar: 0 } };
+        const fora = dia.slice(0, 7) !== base.slice(0, 7);
+        celulas.push(`<button type="button" class="cal-celula${fora ? ' fora' : ''}${dia === hoje ? ' hoje' : ''}" data-act="cal-dia" data-dia="${dia}" aria-label="${D(dia)}">
+          <span class="cal-num">${+dia.slice(8, 10)}</span>
+          <span class="cal-marcas">${d.receber.length ? bolinha('ok') : ''}${d.pagar.length ? bolinha('critico') : ''}</span>
+          ${d.receber.length || d.pagar.length ? `<span class="cal-resumo">${d.totais.receber ? '+' + R(d.totais.receber) : ''}${d.totais.pagar ? ' −' + R(d.totais.pagar) : ''}</span>` : ''}</button>`);
+      }
+      corpo = `<div class="cal-grade">${DIAS_CAL.map(x => `<div class="cal-cab">${x}</div>`).join('')}${celulas.join('')}</div>`;
+    } else if (cal.vista === 'semana') {
+      const colunas = [];
+      for (let dia = de; dia <= ate; dia = Dates.addDays(dia, 1)) {
+        const d = dias[dia] || { receber: [], pagar: [] };
+        colunas.push(`<div class="cal-coluna${dia === hoje ? ' hoje' : ''}"><button type="button" class="cal-cab-btn" data-act="cal-dia" data-dia="${dia}">${DIAS_CAL[new Date(dia + 'T00:00:00Z').getUTCDay()]} ${+dia.slice(8, 10)}</button>${d.receber.map(x => item(x, 'receber')).join('')}${d.pagar.map(x => item(x, 'pagar')).join('')}${!d.receber.length && !d.pagar.length ? '<p class="muted xs">Nada previsto</p>' : ''}</div>`);
+      }
+      corpo = `<div class="cal-semana">${colunas.join('')}</div>`;
+    } else {
+      const d = dias[base] || { receber: [], pagar: [] };
+      corpo = `<h2>A receber</h2>${d.receber.length ? d.receber.map(x => item(x, 'receber')).join('') : '<p class="muted">Nenhuma receita neste dia.</p>'}<h2>A pagar</h2>${d.pagar.length ? d.pagar.map(x => item(x, 'pagar')).join('') : '<p class="muted">Nenhuma despesa neste dia.</p>'}`;
+    }
+    c.innerHTML = `<div class="cab-tela"><h1 class="titulo-tela">Calendário</h1></div>
+      <div class="cal-barra">
+        <div class="linha"><button class="btn btn-sm" data-act="cal-nav" data-passo="-1" aria-label="Anterior">‹</button><button class="btn btn-sm" data-act="cal-nav" data-passo="0">Hoje</button><button class="btn btn-sm" data-act="cal-nav" data-passo="1" aria-label="Próximo">›</button></div>
+        <h2 class="cal-titulo">${esc(titulo)}</h2>
+        <div class="linha">${[['dia', 'Dia'], ['semana', 'Semana'], ['mes', 'Mês']].map(([v, r]) => `<button class="btn btn-sm" data-act="cal-vista" data-vista="${v}" aria-pressed="${cal.vista === v}">${r}</button>`).join('')}</div>
+      </div>
+      <p class="cal-soma"><span class="cal-bolinha cal-ok"></span> A receber em aberto: <b>${R(soma('receber'))}</b> &nbsp; <span class="cal-bolinha cal-critico"></span> A pagar em aberto: <b>${R(soma('pagar'))}</b></p>
+      ${corpo}
+      <p class="xs muted">Mostra lançamentos com vencimento. Os já baixados aparecem em cinza. Lançamentos a faturar (sem data) não entram aqui.</p>`;
+  }
   function telaFluxo(c) {
     const s = core.saldos();
     const f = ui.extrato;
@@ -3776,6 +3871,9 @@ const WRDCore = (function () {
     'nova-transf': () => formTransferencia(),
     'editar-transf': (el, e) => { e.stopPropagation(); formTransferencia(core.get('transferencias', el.dataset.id)); },
     'editar-socio': (el, e) => { e.stopPropagation(); formSocio(core.get('movimentosSocios', el.dataset.id)); },
+    'cal-nav': a => { const cal = ui.cal, p = +a.dataset.passo; if (p === 0) cal.data = hojeISO(); else if (cal.vista === 'mes') cal.data = Dates.addMonths(cal.data.slice(0, 8) + '01', p); else cal.data = Dates.addDays(cal.data, p * (cal.vista === 'semana' ? 7 : 1)); renderAba(); },
+    'cal-vista': a => { ui.cal.vista = a.dataset.vista; renderAba(); },
+    'cal-dia': a => { ui.cal.data = a.dataset.dia; ui.cal.vista = 'dia'; renderAba(); },
     'faturar-titulo': (a) => formFaturar(a.dataset.id),
     'receber-demanda-fin': (a) => receberDemandaFinUI(a.dataset.id, a),
     'novo-socio': () => formSocio(),
