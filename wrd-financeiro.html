@@ -1687,7 +1687,7 @@ const WRDCore = (function () {
       const t = byId('titulos', id); if (!t) fail('Título não encontrado.');
       if (!t.aFaturar || t.vencimento) fail('Só receita a faturar (sem data) recebe data e NF por aqui.');
       if (!Dates.valid(d.vencimento)) fail('Informe a data de vencimento.');
-      const nf = String(d.notaFiscal || '').trim(); if (!nf) fail('Informe o número da nota fiscal emitida.');
+      const nf = String(d.notaFiscal || '').trim(); // NF opcional: nem todo cliente recebe nota
       return mutate(() => {
         Object.assign(t, { vencimento: d.vencimento, notaFiscal: nf, aFaturar: false, updatedAt: nowISO() });
         log('titulo.faturado', 'titulo', t.id, `NF ${nf}, vencimento ${Dates.fmt(d.vencimento)}`);
@@ -3326,7 +3326,7 @@ const WRDCore = (function () {
       titulo: 'Definir data e nota fiscal', tamanho: 'estreito',
       corpo: `<div class="aviso aviso-info">${esc(t.pessoaNome)} · ${esc(t.descricao)} · ${R(t.valor)}. A data de recebimento e a NF são definidas quando o serviço é entregue e a nota é emitida.</div><form id="form-fat" class="grade" novalidate>
         <label class="campo"><span>Vencimento (data de recebimento) <span class="req">*</span></span><input type="date" name="vencimento" required></label>
-        <label class="campo"><span>Número da nota fiscal <span class="req">*</span></span><input type="text" name="notaFiscal" maxlength="40" required></label>
+        <label class="campo"><span>Número da nota fiscal <span class="ajuda">(opcional)</span></span><input type="text" name="notaFiscal" maxlength="40"></label>
         <div class="erro-form" id="fat-erro"></div></form>`,
       rodape: `<button class="btn" data-fechar>Cancelar</button><button class="btn btn-primario" id="salvar-fat">Salvar</button>`
     });
