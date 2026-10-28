@@ -3638,14 +3638,21 @@ const WRDCore = (function () {
   }
 
   function telaRelatorios(c) {
-    const abas = [['relatorios', 'Relatórios'], ['config', 'Configurações'], ['categorias', 'Categorias'], ['usuarios', 'Usuários'], ['dados', 'Dados e backup'], ['nuvem', 'Nuvem e aparelhos'], ['historico', 'Histórico'], ['regras', 'Regras e fontes']]
+    const abas = [['relatorios', 'Relatórios'], ['config', 'Configurações'], ['categorias', 'Categorias'], ['usuarios', 'Usuários'], ['dados', 'Dados e backup'], ['nuvem', 'Nuvem e aparelhos'], ['avisos', 'Avisos no celular'], ['historico', 'Histórico'], ['regras', 'Regras e fontes']]
       .filter(([v]) => v !== 'usuarios' || core.can('usuario.salvar'));
     if (!abas.some(([v]) => v === ui.subRel)) ui.subRel = 'relatorios';
     const sub = ui.subRel;
     c.innerHTML = `<h1 class="titulo-tela">Relatórios e configurações</h1>
       <div class="sub-abas">${abas.map(([v, r]) => `<button data-act="sub-rel" data-sub="${v}" aria-pressed="${sub === v}">${r}</button>`).join('')}</div><div id="rel-corpo"></div>`;
     const el = $('#rel-corpo');
-    ({ relatorios: subRelatorios, config: subConfig, categorias: subCategorias, usuarios: subUsuarios, dados: subDados, historico: subHistorico, regras: subRegras, nuvem: subNuvem }[sub] || subRelatorios)(el);
+    ({ relatorios: subRelatorios, config: subConfig, categorias: subCategorias, usuarios: subUsuarios, dados: subDados, historico: subHistorico, regras: subRegras, nuvem: subNuvem, avisos: subAvisos }[sub] || subRelatorios)(el);
+  }
+  /* Avisos de vencimento no celular: pede a permissão de notificação ao navegador deste aparelho. */
+  function subAvisos(el) {
+    const suportado = typeof Notification !== 'undefined';
+    const permissao = suportado ? Notification.permission : 'indisponivel';
+    const texto = { granted: 'Ativado neste aparelho.', denied: 'Bloqueado. Libere as notificações nas configurações do navegador.', default: 'Ainda não ativado neste aparelho.', indisponivel: 'Este navegador não oferece notificações.' }[permissao];
+    el.innerHTML = '<section class="cartao"><h2>Avisos de vencimento no celular</h2><p>Avisa 2 dias antes e no dia de cada conta a pagar, até a baixa. A ativação precisa ser feita neste aparelho.</p><p class="xs muted">Situação: ' + texto + '</p><div class="linha"><button class="btn btn-primario" data-act="pedir-avisos"' + (permissao === 'granted' || permissao === 'indisponivel' ? ' disabled' : '') + '>Ativar avisos neste aparelho</button></div></section>';
   }
   function subNuvem(el) {
     el.innerHTML = `<section class="cartao">${NV ? NV.abaConfig(core.demo) : '<h2>Nuvem e aparelhos</h2><p>Nuvem indisponível nesta montagem.</p>'}</section>`;
@@ -3874,6 +3881,7 @@ const WRDCore = (function () {
     'cal-nav': a => { const cal = ui.cal, p = +a.dataset.passo; if (p === 0) cal.data = hojeISO(); else if (cal.vista === 'mes') cal.data = Dates.addMonths(cal.data.slice(0, 8) + '01', p); else cal.data = Dates.addDays(cal.data, p * (cal.vista === 'semana' ? 7 : 1)); renderAba(); },
     'cal-vista': a => { ui.cal.vista = a.dataset.vista; renderAba(); },
     'cal-dia': a => { ui.cal.data = a.dataset.dia; ui.cal.vista = 'dia'; renderAba(); },
+    'pedir-avisos': async () => { if (typeof Notification === 'undefined') { toast('Este navegador não oferece notificações.', 'erro'); return; } const r = await Notification.requestPermission(); toast(r === 'granted' ? 'Avisos ativados neste aparelho.' : 'Permissão não concedida.', r === 'granted' ? 'ok' : 'erro'); renderAba(); },
     'faturar-titulo': (a) => formFaturar(a.dataset.id),
     'receber-demanda-fin': (a) => receberDemandaFinUI(a.dataset.id, a),
     'novo-socio': () => formSocio(),
