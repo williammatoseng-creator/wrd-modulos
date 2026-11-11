@@ -1431,7 +1431,7 @@ function criarNucleo(opts) {
       .filter(p => !b || semAcento([rotuloProcesso(p), p.cnpj, p.endereco, p.atividade, p.cnaes].join(' ')).includes(b))
       .sort((a, b2) => rotuloProcesso(a).localeCompare(rotuloProcesso(b2), 'pt-BR'));
   }
-  const CAMPOS_PROC = ['codigoUnidade', 'municipio', 'cnpj', 'endereco', 'atividade', 'cnaes', 'areaUnidade', 'areaEdificacao', 'pavimentos', 'mezanino', 'subsolo', 'populacao', 'altura', 'riscos', 'insercao', 'arquivosDisponiveis', 'observacoesInternas', 'responsavelWrd'];
+  const CAMPOS_PROC = ['codigoUnidade', 'municipio', 'cnpj', 'endereco', 'atividade', 'cnaes', 'areaUnidade', 'areaEdificacao', 'pavimentos', 'mezanino', 'subsolo', 'populacao', 'altura', 'riscos', 'insercao', 'arquivosDisponiveis', 'observacoesInternas', 'responsavelWrd', 'supervisorTelefone', 'supervisorEmail'];
   function salvarProcesso(d, o) {
     guard('processo.salvar');
     if (!cliente(d.clienteId)) fail('Escolha o cliente.');
@@ -1722,7 +1722,6 @@ function criarNucleo(opts) {
   }
 
   /* ---------- modelos de relatório do mapa (colunas, ordem e público escolhidos pela equipe) ---------- */
-  const COLUNAS_INTERNAS_MAPA = ['etapa'];
   function listarModelosMapa() { guard('ler'); return state.modelosMapa.slice(); }
   function salvarModeloMapa(d) {
     const u = guard('relatorio');
@@ -1730,7 +1729,6 @@ function criarNucleo(opts) {
     if (!['equipe', 'cliente'].includes(d.publico)) fail('Escolha para quem é o relatório: equipe ou cliente.');
     const colunas = Array.isArray(d.colunas) ? d.colunas.map(String) : [];
     if (!colunas.length) fail('Escolha ao menos uma coluna.');
-    if (d.publico === 'cliente' && colunas.some(k => COLUNAS_INTERNAS_MAPA.includes(k))) fail('Modelo para o cliente não pode incluir a Etapa (informação interna).');
     return mut(() => {
       let m = d.id ? state.modelosMapa.find(x => x.id === d.id) : null;
       if (m) { Object.assign(m, { nome, publico: d.publico, colunas }); toque(m); }
@@ -1787,10 +1785,36 @@ function criarNucleo(opts) {
       return { id: p.id, jaRecebida: false };
     }, 'processo.demanda_recebida', r => ({ id: r.id }));
   }
+  /* Ajuste pontual da base: contato do supervisor por unidade e remoção de itens fora do controle.
+     Não substitui registros: só mexe nos campos indicados, então o trabalho já feito na base é preservado. */
+  function aplicarAjuste(obj) {
+    guard('usuario.salvar');
+    const motivo = txt(obj.motivoRemocao); if (!motivo && (obj.removerCategorias || []).length) fail('O ajuste precisa informar o motivo da remoção.');
+    const cli = state.clientes.find(c => semAcento(c.nome) === semAcento(txt(obj.cliente)));
+    if (!cli) fail('Cliente do ajuste não encontrado: ' + (txt(obj.cliente) || '(sem nome)') + '.');
+    const cont = { contatos: 0, removidos: 0, naoEncontrados: [] };
+    mut(() => {
+      (obj.unidades || []).forEach(u => {
+        const p = state.processos.find(x => x.clienteId === cli.id && !x.arquivado && x.codigoUnidade === String(u.codigoUnidade));
+        if (!p) { cont.naoEncontrados.push(String(u.codigoUnidade)); return; }
+        if (txt(u.telefone)) p.supervisorTelefone = txt(u.telefone);
+        if (txt(u.email)) p.supervisorEmail = txt(u.email);
+        toque(p); cont.contatos++;
+      });
+      const fora = obj.removerCategorias || [];
+      state.documentos.forEach(doc => {
+        if (doc.removido || !fora.some(c => semAcento(c) === semAcento(doc.categoria))) return;
+        const p = processo(doc.processoId); if (!p || p.clienteId !== cli.id) return;
+        doc.removido = true; fecharPendenciasDoc(doc, 'Item fora do controle: ' + motivo, 'cancelada'); toque(doc); hist(doc, 'Removido da lista: ' + motivo); cont.removidos++;
+      });
+      log('dados.ajustados', 'config', null, `Ajuste da base: ${cont.contatos} contato(s) de supervisor, ${cont.removidos} item(ns) removido(s).`);
+    }, 'dados.importados', cont);
+    return cont;
+  }
   function importarJSON(texto, o) {
     guard('usuario.salvar');
     let obj;
-    try { obj = typeof texto === 'string' ? JSON.parse(texto) : texto; if (!obj || obj.modulo !== 'wrd-ppci-simplificado' || !obj.dados) throw new Error('Arquivo não é uma exportação do WRD PPCI Simplificado.'); if (obj.schemaVersion > SCHEMA_VERSION) throw new Error('Exportação feita por versão mais nova do módulo.'); }
+    try { obj = typeof texto === 'string' ? JSON.parse(texto) : texto; if (obj && obj.modulo === 'wrd-ppci-ajuste') return aplicarAjuste(obj); if (!obj || obj.modulo !== 'wrd-ppci-simplificado' || !obj.dados) throw new Error('Arquivo não é uma exportação do WRD PPCI Simplificado.'); if (obj.schemaVersion > SCHEMA_VERSION) throw new Error('Exportação feita por versão mais nova do módulo.'); }
     catch (e) { if (!(o && o.reprocesso)) { registrarFalha('importacao', 'Falha na importação: ' + e.message, typeof texto === 'string' ? texto : JSON.stringify(texto)); salvarAgora(); } fail('Importação recusada: ' + e.message + ' (registrada em Falhas e reprocessamento).', 'IMPORTACAO'); }
     if (!!obj.demo !== !!demo) fail(obj.demo ? 'Este arquivo é da demonstração: não é importado nos dados reais.' : 'Este arquivo tem dados reais: não é importado na demonstração.');
     const cont = { novos: 0, atualizados: 0, iguais: 0 };
@@ -2026,13 +2050,14 @@ if (typeof module !== 'undefined') module.exports = { criarNucleo, adaptadorMemo
       ${campo('População / lotação', inp('populacao', p.populacao))}${campo('Inserção em edificação maior', inp('insercao', p.insercao), { ajuda: 'Ex.: loja em shopping, sala em edifício comercial.' })}
       ${campo('Riscos específicos (GLP, inflamáveis, outros)', area('riscos', p.riscos), { cls: 'span2' })}
       ${campo('Arquivos disponíveis', area('arquivosDisponiveis', p.arquivosDisponiveis), { cls: 'span2' })}
+      ${campo('Telefone do supervisor da loja', inp('supervisorTelefone', p.supervisorTelefone), { ajuda: 'Aparece no mapa documental e no relatório do cliente.' })}${campo('E-mail do supervisor da loja', inp('supervisorEmail', p.supervisorEmail), { ajuda: 'Aparece no mapa documental e no relatório do cliente.' })}
       ${campo('Responsável WRD', inp('responsavelWrd', p.responsavelWrd))}
       ${campo('Observações internas', area('observacoesInternas', p.observacoesInternas), { cls: 'span2', ajuda: 'Não aparecem no relatório do cliente.' })}</div>`;
     let confirmarDup = false;
     const m = modalForm(id ? 'Editar dados da unidade' : 'Novo processo simplificado', corpo, f => {
       let clienteId = fv(f, 'clienteId');
       const d = { id, clienteId, uf: fv(f, 'uf'), municipio: fv(f, 'municipio'), finalidade: fv(f, 'finalidade') };
-      ['codigoUnidade', 'cnpj', 'endereco', 'atividade', 'cnaes', 'areaUnidade', 'areaEdificacao', 'pavimentos', 'altura', 'mezanino', 'subsolo', 'populacao', 'insercao', 'riscos', 'arquivosDisponiveis', 'responsavelWrd', 'observacoesInternas'].forEach(k => { d[k] = fv(f, k); });
+      ['codigoUnidade', 'cnpj', 'endereco', 'atividade', 'cnaes', 'areaUnidade', 'areaEdificacao', 'pavimentos', 'altura', 'mezanino', 'subsolo', 'populacao', 'insercao', 'riscos', 'arquivosDisponiveis', 'responsavelWrd', 'observacoesInternas', 'supervisorTelefone', 'supervisorEmail'].forEach(k => { d[k] = fv(f, k); });
       if (clienteId === '__novo') { if (!fv(f, 'novoCliente').trim()) throw new Error('Informe o nome do novo cliente.'); d.clienteId = clienteId = core.salvarCliente({ nome: fv(f, 'novoCliente') }); f.querySelector('[name=clienteId]').insertAdjacentHTML('beforeend', opt(clienteId, fv(f, 'novoCliente'), clienteId)); f.querySelector('[name=clienteId]').value = clienteId; }
       try { const nid = core.salvarProcesso(d, { confirmarDuplicidade: confirmarDup }); if (!id) { UI.tela = 'processo'; UI.procId = nid; } toast(id ? 'Dados salvos.' : 'Processo criado.', 'ok'); }
       catch (e) { if (e.code === 'DUPLICIDADE') { confirmarDup = true; m.querySelector('.btn-primario').textContent = 'Salvar mesmo assim'; } throw e; }
@@ -2075,7 +2100,7 @@ if (typeof module !== 'undefined') module.exports = { criarNucleo, adaptadorMemo
     atualizarSalvo();
   }
   function blocoDados(p, c) {
-    const L = [['CNPJ', p.cnpj], ['Endereço', p.endereco], ['Atividade', p.atividade], ['CNAEs', p.cnaes], ['Área da unidade (m²)', p.areaUnidade], ['Área da edificação principal (m²)', p.areaEdificacao], ['Pavimentos', p.pavimentos], ['Altura (m)', p.altura], ['Mezanino', p.mezanino], ['Subsolo', p.subsolo], ['População / lotação', p.populacao], ['Inserção em edificação maior', p.insercao], ['Riscos específicos', p.riscos], ['Arquivos disponíveis', p.arquivosDisponiveis], ['Responsável WRD', p.responsavelWrd], ['Observações internas', p.observacoesInternas], ['Chave interna', p.chave]];
+    const L = [['CNPJ', p.cnpj], ['Endereço', p.endereco], ['Atividade', p.atividade], ['CNAEs', p.cnaes], ['Área da unidade (m²)', p.areaUnidade], ['Área da edificação principal (m²)', p.areaEdificacao], ['Pavimentos', p.pavimentos], ['Altura (m)', p.altura], ['Mezanino', p.mezanino], ['Subsolo', p.subsolo], ['População / lotação', p.populacao], ['Inserção em edificação maior', p.insercao], ['Riscos específicos', p.riscos], ['Arquivos disponíveis', p.arquivosDisponiveis], ['Telefone do supervisor', p.supervisorTelefone], ['E-mail do supervisor', p.supervisorEmail], ['Responsável WRD', p.responsavelWrd], ['Observações internas', p.observacoesInternas], ['Chave interna', p.chave]];
     return `<table class="tab"><tbody><tr><th>Cliente</th><td>${esc(c.nome)}${c.cnpj ? ' · ' + esc(c.cnpj) : ''}</td></tr>${L.map(([r, v]) => `<tr><th>${r}</th><td class="pre">${ni(v)}</td></tr>`).join('')}</tbody></table><p class="xs muted">Dado ausente aparece como NÃO INFORMADO; nunca é estimado.</p>`;
   }
   function blocoEnquadramento(p, norma, ed) {
@@ -2221,23 +2246,34 @@ if (typeof module !== 'undefined') module.exports = { criarNucleo, adaptadorMemo
   /* Colunas do mapa: a equipe escolhe quais aparecem, em que ordem e para quem é o relatório (equipe ou cliente) */
   const COLUNAS_FIXAS_MAPA = [
     { k: 'unidade', rot: 'Unidade' },
-    { k: 'etapa', rot: 'Etapa', interna: true },
+    { k: 'telefone', rot: 'Telefone supervisor' },
+    { k: 'email', rot: 'E-mail de contato' },
+    { k: 'etapa', rot: 'Andamento' },
     { k: 'licenca', rot: 'Licença' },
     { k: 'progresso', rot: 'Progresso' }
   ];
   const PUBLICO_MAPA = { equipe: 'Equipe WRD (uso interno)', cliente: 'Cliente' };
+  /* Relatório ao cliente: só o que ele precisa enviar e, por último, o andamento do processo */
+  const CLIENTE_PADRAO_MAPA = ['unidade', 'telefone', 'email', 'cat:Comprovante de endereço / IPTU', 'cat:NF externa (NF ext.)', 'cat:PPCI anterior (PPCI ant.)', 'cat:Projeto (Projeto)', 'etapa'];
+  function trocarPublicoMapa(pub) {
+    UI.mapaPublico = pub;
+    UI.mapaMarcadas = pub === 'cliente' ? CLIENTE_PADRAO_MAPA.slice() : null;
+    UI.mapaOrdem = pub === 'cliente' ? CLIENTE_PADRAO_MAPA.slice() : null;
+  }
   function colunasMapa(cats) {
     const todas = [...COLUNAS_FIXAS_MAPA, ...cats.map(c => ({ k: 'cat:' + c, rot: c }))];
     const ordem = (UI.mapaOrdem || []).filter(k => todas.some(c => c.k === k));
     todas.forEach(c => { if (!ordem.includes(c.k)) ordem.push(c.k); });
     UI.mapaOrdem = ordem;
     if (!UI.mapaMarcadas) UI.mapaMarcadas = todas.map(c => c.k);
-    return ordem.map(k => todas.find(c => c.k === k)).map(c => Object.assign({}, c, { marcada: UI.mapaMarcadas.includes(c.k) && !(UI.mapaPublico === 'cliente' && c.interna) }));
+    return ordem.map(k => todas.find(c => c.k === k)).map(c => Object.assign({}, c, { marcada: UI.mapaMarcadas.includes(c.k) }));
   }
   function celulaColuna(p, c, pdf) {
     if (c.k === 'unidade') return pdf
       ? `<td>${esc(p.codigoUnidade || 'Unidade')} — ${esc(p.municipio)}/${esc(p.uf)}${p.cnpj ? `<div>${esc(p.cnpj)}</div>` : ''}</td>`
       : `<td class="uni"><b>${esc(core.cliente(p.clienteId).nome)}</b>${p.codigoUnidade ? ' · ' + esc(p.codigoUnidade) : ''}<div class="xs muted">${esc(p.municipio)}/${esc(p.uf)}${p.cnpj ? ' · ' + esc(p.cnpj) : ''}</div></td>`;
+    if (c.k === 'telefone') return `<td>${esc(p.supervisorTelefone || 'NÃO INFORMADO')}</td>`;
+    if (c.k === 'email') return `<td>${esc(p.supervisorEmail || 'NÃO INFORMADO')}</td>`;
     if (c.k === 'etapa') return `<td class="xs">${esc(ETAPAS[p.etapa])}</td>`;
     if (c.k === 'licenca') return pdf ? `<td>${esc(situacaoLicenca(p).rot)}</td>` : `<td>${chipLic(p)}</td>`;
     if (c.k === 'progresso') {
@@ -2251,8 +2287,8 @@ if (typeof module !== 'undefined') module.exports = { criarNucleo, adaptadorMemo
     const cliente = UI.mapaPublico === 'cliente', modelos = core.listarModelosMapa();
     return `<details class="mais" open><summary>Colunas e modelo do relatório</summary>
       <div class="filtros"><label class="campo"><span>Para quem é o relatório</span><select data-mapa-publico>${Object.entries(PUBLICO_MAPA).map(([k, r]) => opt(k, r, UI.mapaPublico)).join('')}</select></label></div>
-      <p class="xs muted">Marque as colunas e use as setas para a ordem. ${cliente ? 'Para o cliente, a Etapa é informação interna e não entra.' : ''}</p>
-      <ul class="lista-colunas">${cols.map((c, i) => `<li><label><input type="checkbox" data-mapa-col="${esc(c.k)}" ${c.marcada ? 'checked' : ''} ${cliente && c.interna ? 'disabled' : ''}> ${esc(c.rot)}</label>
+      <p class="xs muted">Marque as colunas e use as setas para a ordem. ${cliente ? 'Para o cliente, a lista já vem com o que ele envia e, por último, o andamento.' : ''}</p>
+      <ul class="lista-colunas">${cols.map((c, i) => `<li><label><input type="checkbox" data-mapa-col="${esc(c.k)}" ${c.marcada ? 'checked' : ''}> ${esc(c.rot)}</label>
         <button type="button" class="btn btn-sm" data-act="mapa-col-mover" data-k="${esc(c.k)}" data-d="-1" ${i === 0 ? 'disabled' : ''} aria-label="Subir ${esc(c.rot)}">▲</button><button type="button" class="btn btn-sm" data-act="mapa-col-mover" data-k="${esc(c.k)}" data-d="1" ${i === cols.length - 1 ? 'disabled' : ''} aria-label="Descer ${esc(c.rot)}">▼</button></li>`).join('')}</ul>
       <div class="linha"><button type="button" class="btn btn-primario" data-act="mapa-modelo-salvar">Salvar como modelo…</button></div>
       ${modelos.length ? `<h3>Modelos salvos</h3><ul class="lista-colunas">${modelos.map(m => `<li><b>${esc(m.nome)}</b> · ${esc(PUBLICO_MAPA[m.publico])} · ${m.colunas.length} coluna(s) <button type="button" class="btn btn-sm" data-act="mapa-modelo-aplicar" data-id="${m.id}">Aplicar</button> <button type="button" class="btn btn-sm btn-perigo" data-act="mapa-modelo-excluir" data-id="${m.id}">Excluir</button></li>`).join('')}</ul>` : '<p class="xs muted">Nenhum modelo salvo ainda.</p>'}
@@ -2270,7 +2306,7 @@ if (typeof module !== 'undefined') module.exports = { criarNucleo, adaptadorMemo
       ${tabela}</div>`;
     $('#filtros-mapa').addEventListener('change', e => { UI.fMapa[e.target.name] = e.target.value; renderTela(); });
     $('#painel-colunas').addEventListener('change', e => {
-      if (e.target.dataset.mapaPublico !== undefined) { UI.mapaPublico = e.target.value; return renderTela(); }
+      if (e.target.dataset.mapaPublico !== undefined) { trocarPublicoMapa(e.target.value); return renderTela(); }
       const k = e.target.dataset.mapaCol; if (k === undefined) return;
       UI.mapaMarcadas = e.target.checked ? [...new Set([...UI.mapaMarcadas, k])] : UI.mapaMarcadas.filter(x => x !== k);
       renderTela();
