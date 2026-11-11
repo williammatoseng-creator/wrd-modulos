@@ -757,6 +757,14 @@ const ETAPAS = {
   encerrado: 'Encerrado',
   fora_escopo: 'Encaminhado — fora do simplificado'
 };
+/* Status para acompanhamento com o cliente (escolhido pela equipe no mapa; não substitui a etapa) */
+const STATUS_CLIENTE = {
+  concluido: 'concluído',
+  analise_cb: 'análise do corpo de bombeiros',
+  andamento: 'andamento',
+  pendente_documentacao: 'pendente documentação',
+  nao_iniciado: 'não iniciado'
+};
 const FINALIDADE = { primeira: 'Primeira emissão', renovacao: 'Renovação' };
 const STATUS_FONTE = { confirmado_oficial: 'Confirmado em fonte oficial', condicional: 'Condicional ao enquadramento', nao_confirmado: 'Não confirmado' };
 const CHECAGENS_PROTOCOLO = {
@@ -1504,6 +1512,11 @@ function criarNucleo(opts) {
     if (p.enquadramento === 'fora_escopo' && !['fora_escopo', 'encerrado'].includes(etapa)) b.push('Processo fora do escopo simplificado: altere o enquadramento antes.');
     return b;
   }
+  function definirStatusCliente(id, status) {
+    guard('processo.salvar'); const p = processo(id); if (!p) fail('Processo não encontrado.');
+    if (status && !STATUS_CLIENTE[status]) fail('Status inválido.');
+    mut(() => { p.statusCliente = status || ''; toque(p); log('processo.status', 'processo', p, `Status: ${STATUS_CLIENTE[status] || 'não definido'}.`); }, 'processo.status_alterado', { id, status });
+  }
   function mudarEtapa(id, etapa, d) {
     guard('processo.salvar'); const p = processo(id); if (!p) fail('Processo não encontrado.'); if (!ETAPAS[etapa]) fail('Etapa inválida.');
     if (d && d.protocolo) p.protocolo = { numero: txt(d.protocolo.numero), data: txt(d.protocolo.data) };
@@ -1865,7 +1878,7 @@ function criarNucleo(opts) {
     onEvento: fn => ouvintes.push(fn), salvarAgora, statusSalvamento: () => ({ ultimoSalvo, erro: erroSalvar }),
     user, can, hasUsers, setupAdmin, login, logout, usuariosDemo, entrarDemo, listarUsuarios, salvarUsuario, alterarSenha,
     cliente, listarClientes, salvarCliente,
-    processo, listarProcessos, salvarProcesso, receberDemandaOperacao, duplicidades, rotuloProcesso, salvarLicenca, normasDaUF, definirEnquadramento, encaminhamentoForaEscopo, salvarChecagens, bloqueiosEtapa, mudarEtapa, arquivarProcesso,
+    processo, listarProcessos, salvarProcesso, receberDemandaOperacao, duplicidades, rotuloProcesso, salvarLicenca, normasDaUF, definirEnquadramento, encaminhamentoForaEscopo, salvarChecagens, bloqueiosEtapa, mudarEtapa, definirStatusCliente, arquivarProcesso,
     documento, docsDo, salvarDocumento, aplicarListaBase, definirAplicabilidade, registrarSolicitacao, registrarRecebimento, avisosValidacao, validarDocumento, pedirCorrecao, marcarPendente, removerDocumento, progresso,
     listarPendencias, salvarPendencia, resolverPendencia, diasEmAberto,
     listarNormas, salvarNorma, arquivarNorma,
@@ -2252,11 +2265,12 @@ if (typeof module !== 'undefined') module.exports = { criarNucleo, adaptadorMemo
     { k: 'email', rot: 'E-mail de contato' },
     { k: 'etapa', rot: 'Andamento' },
     { k: 'licenca', rot: 'Licença' },
-    { k: 'progresso', rot: 'Progresso' }
+    { k: 'progresso', rot: 'Progresso' },
+    { k: 'status', rot: 'Status' }
   ];
   const PUBLICO_MAPA = { equipe: 'Equipe WRD (uso interno)', cliente: 'Cliente' };
-  /* Relatório ao cliente: só o que ele precisa enviar e, por último, o andamento do processo */
-  const CLIENTE_PADRAO_MAPA = ['unidade', 'endereco', 'telefone', 'email', 'cat:Comprovante de endereço / IPTU', 'cat:NF externa (NF ext.)', 'cat:PPCI anterior (PPCI ant.)', 'cat:Projeto (Projeto)', 'etapa'];
+  /* Relatório ao cliente: só o que ele precisa enviar e, por último, o status escolhido pela equipe */
+  const CLIENTE_PADRAO_MAPA = ['unidade', 'endereco', 'telefone', 'email', 'cat:Comprovante de endereço / IPTU', 'cat:NF externa (NF ext.)', 'cat:PPCI anterior (PPCI ant.)', 'cat:Projeto (Projeto)', 'status'];
   function trocarPublicoMapa(pub) {
     UI.mapaPublico = pub;
     UI.mapaMarcadas = pub === 'cliente' ? CLIENTE_PADRAO_MAPA.slice() : null;
@@ -2278,6 +2292,10 @@ if (typeof module !== 'undefined') module.exports = { criarNucleo, adaptadorMemo
     if (c.k === 'telefone') return `<td>${esc(p.supervisorTelefone || 'NÃO INFORMADO')}</td>`;
     if (c.k === 'email') return `<td>${esc(p.supervisorEmail || 'NÃO INFORMADO')}</td>`;
     if (c.k === 'etapa') return `<td class="xs">${esc(ETAPAS[p.etapa])}</td>`;
+    if (c.k === 'status') {
+      if (pdf || !podeEditar()) return `<td>${esc(STATUS_CLIENTE[p.statusCliente] || 'a definir')}</td>`;
+      return `<td><select class="sel-estado" data-status-proc="${esc(p.id)}" aria-label="Status da unidade ${esc(p.codigoUnidade || '')}"><option value="">${esc(STATUS_CLIENTE[p.statusCliente] || 'selecione…')}</option>${Object.entries(STATUS_CLIENTE).filter(([k]) => k !== p.statusCliente).map(([k, r]) => `<option value="${k}">${esc(r)}</option>`).join('')}</select></td>`;
+    }
     if (c.k === 'licenca') return pdf ? `<td>${esc(situacaoLicenca(p).rot)}</td>` : `<td>${chipLic(p)}</td>`;
     if (c.k === 'progresso') {
       const pr = core.progresso(p.id);
@@ -2314,6 +2332,9 @@ if (typeof module !== 'undefined') module.exports = { criarNucleo, adaptadorMemo
       UI.mapaMarcadas = e.target.checked ? [...new Set([...UI.mapaMarcadas, k])] : UI.mapaMarcadas.filter(x => x !== k);
       renderTela();
     });
+    $$('select[data-status-proc]').forEach(s => s.addEventListener('change', () => {
+      tentar(() => { core.definirStatusCliente(s.dataset.statusProc, s.value); toast('Status atualizado.', 'ok'); renderTela(); });
+    }));
   }
   function moverColunaMapa(k, d) {
     const o = UI.mapaOrdem.slice(), i = o.indexOf(k), j = i + d;
@@ -2521,6 +2542,7 @@ if (typeof module !== 'undefined') module.exports = { criarNucleo, adaptadorMemo
   /* =================================================================== */
   document.addEventListener('click', e => {
     const t = e.target.closest('[data-tela]'); if (t && $('#app').contains(t)) { UI.tela = t.dataset.tela; renderTela(); window.scrollTo(0, 0); return; }
+    if (e.target.closest('select')) return; // a escolha de status na tabela não abre o processo
     const b = e.target.closest('[data-act]'); if (!b || !$('#app').contains(b)) return;
     const a = b.dataset.act, id = b.dataset.id;
     const acoes = {
