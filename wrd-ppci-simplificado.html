@@ -1797,6 +1797,7 @@ function criarNucleo(opts) {
       (obj.unidades || []).forEach(u => {
         const p = state.processos.find(x => x.clienteId === cli.id && !x.arquivado && x.codigoUnidade === String(u.codigoUnidade));
         if (!p) { cont.naoEncontrados.push(String(u.codigoUnidade)); return; }
+        if (txt(u.endereco)) p.endereco = txt(u.endereco);
         if (txt(u.telefone)) p.supervisorTelefone = txt(u.telefone);
         if (txt(u.email)) p.supervisorEmail = txt(u.email);
         toque(p); cont.contatos++;
@@ -2246,6 +2247,7 @@ if (typeof module !== 'undefined') module.exports = { criarNucleo, adaptadorMemo
   /* Colunas do mapa: a equipe escolhe quais aparecem, em que ordem e para quem é o relatório (equipe ou cliente) */
   const COLUNAS_FIXAS_MAPA = [
     { k: 'unidade', rot: 'Unidade' },
+    { k: 'endereco', rot: 'Endereço' },
     { k: 'telefone', rot: 'Telefone supervisor' },
     { k: 'email', rot: 'E-mail de contato' },
     { k: 'etapa', rot: 'Andamento' },
@@ -2254,7 +2256,7 @@ if (typeof module !== 'undefined') module.exports = { criarNucleo, adaptadorMemo
   ];
   const PUBLICO_MAPA = { equipe: 'Equipe WRD (uso interno)', cliente: 'Cliente' };
   /* Relatório ao cliente: só o que ele precisa enviar e, por último, o andamento do processo */
-  const CLIENTE_PADRAO_MAPA = ['unidade', 'telefone', 'email', 'cat:Comprovante de endereço / IPTU', 'cat:NF externa (NF ext.)', 'cat:PPCI anterior (PPCI ant.)', 'cat:Projeto (Projeto)', 'etapa'];
+  const CLIENTE_PADRAO_MAPA = ['unidade', 'endereco', 'telefone', 'email', 'cat:Comprovante de endereço / IPTU', 'cat:NF externa (NF ext.)', 'cat:PPCI anterior (PPCI ant.)', 'cat:Projeto (Projeto)', 'etapa'];
   function trocarPublicoMapa(pub) {
     UI.mapaPublico = pub;
     UI.mapaMarcadas = pub === 'cliente' ? CLIENTE_PADRAO_MAPA.slice() : null;
@@ -2272,6 +2274,7 @@ if (typeof module !== 'undefined') module.exports = { criarNucleo, adaptadorMemo
     if (c.k === 'unidade') return pdf
       ? `<td>${esc(p.codigoUnidade || 'Unidade')} — ${esc(p.municipio)}/${esc(p.uf)}${p.cnpj ? `<div>${esc(p.cnpj)}</div>` : ''}</td>`
       : `<td class="uni"><b>${esc(core.cliente(p.clienteId).nome)}</b>${p.codigoUnidade ? ' · ' + esc(p.codigoUnidade) : ''}<div class="xs muted">${esc(p.municipio)}/${esc(p.uf)}${p.cnpj ? ' · ' + esc(p.cnpj) : ''}</div></td>`;
+    if (c.k === 'endereco') return `<td>${esc(p.endereco || 'NÃO INFORMADO')}</td>`;
     if (c.k === 'telefone') return `<td>${esc(p.supervisorTelefone || 'NÃO INFORMADO')}</td>`;
     if (c.k === 'email') return `<td>${esc(p.supervisorEmail || 'NÃO INFORMADO')}</td>`;
     if (c.k === 'etapa') return `<td class="xs">${esc(ETAPAS[p.etapa])}</td>`;
